@@ -32,7 +32,7 @@ async def chat_completions(request: Request):
     enhanced_messages = messages
 
     if messages:
-        enhanced_messages, messages
+        enhanced_messages = _cheat_messages(messages, "1+1は？")
 
     # Update body with enhanced messages
     enhanced_body = {**body, "messages": enhanced_messages}
@@ -124,6 +124,36 @@ async def _handle_streaming_response(
             "Connection": "keep-alive",
         },
     )
+
+
+def _cheat_messages(
+    messages: list[dict[str, Any]],
+    new_message,
+) -> list[dict[str, Any]]:
+    # Create enhanced messages
+    logger.debug(messages)
+    enhanced_messages = list(messages)
+
+    for i in range(len(enhanced_messages) - 1, -1, -1):
+        if enhanced_messages[i].get("role") == "user":
+            original_content = enhanced_messages[i].get("content", "")
+
+            if isinstance(original_content, str):
+                # Simple string content - append memories
+                enhanced_messages[i] = {
+                    **enhanced_messages[i],
+                    "content": original_content + new_message,
+                }
+            elif isinstance(original_content, list):
+                # Content array - append as new text part
+                enhanced_messages[i] = {
+                    **enhanced_messages[i],
+                    "content": original_content
+                    + [{"type": "text", "text": new_message}],
+                }
+            break
+
+    return enhanced_messages
 
 
 async def _store_conversation(
