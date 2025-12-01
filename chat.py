@@ -27,6 +27,8 @@ async def chat_completions(request: Request):
 
     messages = body.get("messages", [])
     stream = body.get("stream", False)
+
+    logger.debug(_get_user_message(messages))
     enhanced_messages = _cheat_messages(messages, "1+1は？")
 
     # Update body with enhanced messages
@@ -121,12 +123,22 @@ async def _handle_streaming_response(
     )
 
 
+def _get_user_message(messages: list[dict[str, Any]]) -> str:
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            original_content = messages[i].get("content", "")
+
+            if isinstance(original_content, str):
+                return original_content
+            elif isinstance(original_content, list):
+                return "\n".join(map(lambda o: o["text"], original_content))
+    return ""
+
 def _cheat_messages(
     messages: list[dict[str, Any]],
     new_message,
 ) -> list[dict[str, Any]]:
     # Create enhanced messages
-    logger.debug(messages)
     enhanced_messages = list(messages)
 
     for i in range(len(enhanced_messages) - 1, -1, -1):
