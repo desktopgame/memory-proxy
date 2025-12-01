@@ -3,6 +3,7 @@ HTTP proxy client for forwarding requests to llama.cpp server.
 """
 
 import httpx
+import os
 from typing import Any, AsyncGenerator
 
 
@@ -103,7 +104,7 @@ def get_proxy() -> LlamaProxy:
     """Get the global proxy instance."""
     global _proxy
     if _proxy is None:
-        _proxy = LlamaProxy("http://localhost:7071")
+        _proxy = LlamaProxy(os.getenv("DELEGATE_URL", "http://localhost:7071"))
     return _proxy
 
 
