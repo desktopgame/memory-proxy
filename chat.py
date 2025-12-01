@@ -27,12 +27,7 @@ async def chat_completions(request: Request):
 
     messages = body.get("messages", [])
     stream = body.get("stream", False)
-
-    # Enhance messages with relevant memories
-    enhanced_messages = messages
-
-    if messages:
-        enhanced_messages = _cheat_messages(messages, "1+1は？")
+    enhanced_messages = _cheat_messages(messages, "1+1は？")
 
     # Update body with enhanced messages
     enhanced_body = {**body, "messages": enhanced_messages}
