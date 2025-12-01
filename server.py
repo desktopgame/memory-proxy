@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+import chat
 from libproxy import get_proxy, close_proxy
 
 
@@ -32,7 +33,7 @@ def create_app() -> FastAPI:
     )
 
     # Include chat routes
-    # app.include_router(chat.router)
+    app.include_router(chat.router)
 
     # Catch-all proxy for other OpenAI API endpoints
     @app.api_route(

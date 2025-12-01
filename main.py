@@ -6,11 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-
 def setup_logging(level: str):
     """Configure logging for the application."""
     log_level = getattr(logging, level, logging.INFO)
-    
+
     # Configure root logger
     logging.basicConfig(
         level=log_level,
@@ -18,15 +17,14 @@ def setup_logging(level: str):
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stdout,
     )
-    
+
     # Set specific loggers
     logging.getLogger("app").setLevel(log_level)
-    
+
     # Reduce noise from external libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-
 
 
 def main():
