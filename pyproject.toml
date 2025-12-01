@@ -11,4 +11,5 @@ dependencies = [
     "mecab-python3>=1.0.12",
     "python-dotenv>=1.2.1",
     "ruff>=0.14.7",
+    "uvicorn>=0.38.0",
 ]
