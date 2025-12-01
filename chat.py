@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
+from libmemory import save_memory, load_memory
 from libproxy import get_proxy, LlamaProxy
 
 
@@ -28,8 +29,11 @@ async def chat_completions(request: Request):
     messages = body.get("messages", [])
     stream = body.get("stream", False)
 
-    logger.debug(_get_user_message(messages))
-    enhanced_messages = _cheat_messages(messages, "1+1は？")
+    prompt = _get_user_message(messages)
+    logger.debug(prompt)
+    enhanced_messages = _cheat_messages(messages, load_memory(prompt))
+
+    save_memory(prompt)
 
     # Update body with enhanced messages
     enhanced_body = {**body, "messages": enhanced_messages}
