@@ -335,22 +335,31 @@ class MemorySystem:
 
         logger.debug(f"Updated assistant message for {conversation_id}")
 
-    async def load_memory(self, query: str, n_results: int = 5) -> str:
+    async def load_memory(
+        self,
+        query: str,
+        n_results: int = 5,
+        chain_depth_before: int = 2,
+        chain_depth_after: int = 2,
+    ) -> str:
         """
-        Load relevant memories based on the query.
+        Load relevant memories based on the query, including conversation context.
         
         This method:
         1. Searches the knowledge graph for related entities
         2. Uses LLM to generate an optimized search query
         3. Performs semantic search on RAG
-        4. Returns formatted memory context
+        4. Retrieves conversation chain (before/after) for each hit
+        5. Returns formatted memory context
         
         Args:
             query: The search query (usually the user's current message)
             n_results: Maximum number of results to return
+            chain_depth_before: How many previous conversations to retrieve
+            chain_depth_after: How many next conversations to retrieve
             
         Returns:
-            Formatted string containing relevant memories
+            Formatted string containing relevant memories with context
         """
         self._ensure_initialized()
 
@@ -372,7 +381,7 @@ class MemorySystem:
         if not results["documents"] or not results["documents"][0]:
             return ""
 
-        # Format results
+        # Format results with conversation chain
         memories = []
         for i, (doc, metadata, distance) in enumerate(zip(
             results["documents"][0],
@@ -381,20 +390,35 @@ class MemorySystem:
         )):
             conversation_id = metadata.get("conversation_id")
             
-            # Get assistant response from SQLite
-            assistant_response = self._get_assistant_response(conversation_id)
+            # Get conversation chain (before and after)
+            chain = self._get_conversation_chain(
+                conversation_id,
+                depth_before=chain_depth_before,
+                depth_after=chain_depth_after,
+            )
             
-            memory_entry = f"[Memory {i+1}] User: {doc}"
-            if assistant_response:
-                memory_entry += f"\nAssistant: {assistant_response}"
-            memories.append(memory_entry)
+            if chain:
+                # Find center index (the hit conversation)
+                center_index = next(
+                    (i for i, r in enumerate(chain) if r.id == conversation_id),
+                    len(chain) // 2
+                )
+                chain_text = self._format_conversation_chain(chain, center_index)
+                memories.append(f"[Memory {i+1}]\n{chain_text}")
+            else:
+                # Fallback: just show the hit conversation
+                assistant_response = self._get_assistant_response(conversation_id)
+                memory_entry = f"[Memory {i+1}] User: {doc}"
+                if assistant_response:
+                    memory_entry += f"\nAssistant: {assistant_response}"
+                memories.append(memory_entry)
 
         if not memories:
             return ""
 
         return "\n\n---\n\n".join([
             "\n\n<memories>",
-            "以下は過去の会話から検索された関連する記憶です：",
+            "以下は過去の会話から検索された関連する記憶です（前後の文脈を含む）：",
             *memories,
             "</memories>\n\n",
         ])
