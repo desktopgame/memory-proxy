@@ -385,7 +385,7 @@ class MemorySystem:
             session.add(relation)
             session.commit()
 
-    def _get_related_entities(self, text: str, max_depth: int = 2) -> list[str]:
+    def _get_related_entities(self, text: str, max_depth: int = 3) -> list[str]:
         """
         Find entities in text and get their related entities from the graph.
         
