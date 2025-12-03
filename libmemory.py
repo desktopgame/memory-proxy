@@ -689,7 +689,6 @@ class MemorySystem:
                 model=SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200,
                 response_format={
                     "type": "json_schema",
                     "json_schema": json_schema
@@ -864,7 +863,6 @@ class MemorySystem:
                 model=SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500,
                 response_format={
                     "type": "json_schema",
                     "json_schema": json_schema
