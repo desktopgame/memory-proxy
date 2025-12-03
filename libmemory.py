@@ -591,23 +591,25 @@ class MemorySystem:
             session.add(relation)
             session.commit()
 
-    def _get_related_entities(self, text: str, max_depth: int = 2) -> list[str]:
+    def _get_related_entities(self, text: str, max_depth: int = 2) -> list[tuple[str, float]]:
         """
         Find entities in text and get their related entities from the graph.
         
         Uses MeCab to extract keywords from text, then matches them against
-        entities in the knowledge graph.
+        entities in the knowledge graph. Returns entities with weights based
+        on graph distance (exponential decay: 0.5^depth).
         
         Args:
             text: Text to search for entities
             max_depth: How many hops to traverse in the graph
             
         Returns:
-            List of related entity names
+            List of tuples (entity_name, weight) sorted by weight descending
         """
         self._ensure_initialized()
 
-        related = set()
+        # Dictionary to store entity -> weight (keep max weight if found multiple times)
+        entity_weights: dict[str, float] = {}
 
         # Extract keywords from text using MeCab
         keywords = extract_keywords_mecab(text)
@@ -627,7 +629,7 @@ class MemorySystem:
 
             logger.debug(f"Matched entities: {[e.name for e in mentioned]}")
 
-            # BFS to find related entities
+            # BFS to find related entities with depth tracking
             to_visit = [(e, 0) for e in mentioned]
             visited_ids = set()
 
@@ -636,7 +638,13 @@ class MemorySystem:
                 if entity.id in visited_ids or depth > max_depth:
                     continue
                 visited_ids.add(entity.id)
-                related.add(entity.name)
+                
+                # Exponential decay weight: 0.5^depth
+                weight = math.pow(0.5, depth)
+                
+                # Keep max weight if entity already exists
+                if entity.name not in entity_weights or entity_weights[entity.name] < weight:
+                    entity_weights[entity.name] = weight
 
                 if depth < max_depth:
                     # Get related entities
@@ -651,30 +659,46 @@ class MemorySystem:
                             if source:
                                 to_visit.append((source, depth + 1))
 
-        return list(related)
+        # Sort by weight descending and return as list of tuples
+        sorted_entities = sorted(entity_weights.items(), key=lambda x: x[1], reverse=True)
+        logger.debug(f"Weighted entities: {sorted_entities}")
+        return sorted_entities
 
-    async def _generate_search_query(self, user_query: str, related_entities: list[str]) -> str:
+    async def _generate_search_query(
+        self, user_query: str, weighted_entities: list[tuple[str, float]]
+    ) -> str:
         """
         Use LLM to generate an optimized search query for RAG.
         
         Args:
             user_query: The user's current message
-            related_entities: Related entities from knowledge graph
+            weighted_entities: List of (entity_name, weight) tuples from knowledge graph
             
         Returns:
             Optimized search query string
         """
         # If no related entities and short query, use original
-        if not related_entities and len(user_query) < 50:
+        if not weighted_entities and len(user_query) < 50:
             return user_query
 
         entities_context = ""
-        if related_entities:
-            entities_str = ", ".join(related_entities[:10])
-            entities_context = f"\n\n関連するエンティティ（ナレッジグラフから）: {entities_str}"
+        if weighted_entities:
+            # Format weighted entities for LLM
+            entity_lines = []
+            for name, weight in weighted_entities[:10]:
+                if weight >= 0.75:
+                    relevance = "高"
+                elif weight >= 0.25:
+                    relevance = "中"
+                else:
+                    relevance = "低"
+                entity_lines.append(f"  - {name} (関連度: {relevance})")
+            entities_str = "\n".join(entity_lines)
+            entities_context = f"\n\n関連するエンティティ（ナレッジグラフから、関連度順）:\n{entities_str}"
 
         prompt = f"""以下のユーザーの発言に対して、過去の会話履歴を検索するための最適な検索クエリを生成してください。
 検索クエリは、ユーザーの意図を捉えつつ、関連する記憶を見つけやすいように言い換えや拡張を行ってください。
+関連度が高いエンティティを優先的に検索クエリに含めてください。
 {entities_context}
 
 ユーザーの発言: {user_query}
@@ -723,9 +747,11 @@ class MemorySystem:
         except Exception as e:
             logger.warning(f"Search query generation failed: {e}, using original query")
 
-        # Fallback: simple expansion
-        if related_entities:
-            entities_str = ", ".join(related_entities[:5])
+        # Fallback: simple expansion (prioritize high-weight entities)
+        if weighted_entities:
+            # Take top 5 entities by weight
+            top_entities = [name for name, weight in weighted_entities[:5]]
+            entities_str = ", ".join(top_entities)
             return f"{user_query} {entities_str}"
         return user_query
 
