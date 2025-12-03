@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import chat
 from libproxy import get_proxy, close_proxy
+from libmemory import close_memory_system
 
 
 load_dotenv()
@@ -20,6 +21,7 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     yield
     await close_proxy()
+    await close_memory_system()
 
 
 def create_app() -> FastAPI:

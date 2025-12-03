@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from libmemory import save_memory, load_memory
+from libmemory import save_memory, load_memory, process_conversation
 from libproxy import get_proxy, LlamaProxy
 
 
@@ -29,11 +29,16 @@ async def chat_completions(request: Request):
     messages = body.get("messages", [])
     stream = body.get("stream", False)
 
-    prompt = _get_user_message(messages)
-    logger.debug(prompt)
-    enhanced_messages = _cheat_messages(messages, load_memory(prompt))
+    # Get user message and load relevant memories
+    user_message = _get_user_message(messages)
+    logger.debug(f"User message: {user_message}")
+    
+    memory_context = load_memory(user_message)
+    enhanced_messages = _cheat_messages(messages, memory_context)
 
-    save_memory(prompt)
+    # Save user message to memory and get conversation_id
+    conversation_id = save_memory(user_message)
+    logger.debug(f"Saved conversation: {conversation_id}")
 
     # Update body with enhanced messages
     enhanced_body = {**body, "messages": enhanced_messages}
@@ -43,18 +48,19 @@ async def chat_completions(request: Request):
 
     if stream:
         return await _handle_streaming_response(
-            proxy, enhanced_body, messages, request.headers
+            proxy, enhanced_body, user_message, conversation_id, request.headers
         )
     else:
         return await _handle_non_streaming_response(
-            proxy, enhanced_body, messages, request.headers
+            proxy, enhanced_body, user_message, conversation_id, request.headers
         )
 
 
 async def _handle_non_streaming_response(
     proxy: LlamaProxy,
     body: dict[str, Any],
-    original_messages: list[dict[str, Any]],
+    user_message: str,
+    conversation_id: str,
     headers,
 ) -> JSONResponse:
     """Handle non-streaming chat completion request."""
@@ -74,13 +80,10 @@ async def _handle_non_streaming_response(
 
     result = response.json()
 
-    # Extract assistant's response and store in memory
+    # Extract assistant's response and process conversation
     assistant_content = _extract_assistant_content(result)
     if assistant_content:
-        await _store_conversation(
-            messages=original_messages,
-            response_content=assistant_content,
-        )
+        await process_conversation(conversation_id, user_message, assistant_content)
 
     return JSONResponse(content=result)
 
@@ -88,7 +91,8 @@ async def _handle_non_streaming_response(
 async def _handle_streaming_response(
     proxy: LlamaProxy,
     body: dict[str, Any],
-    original_messages: list[dict[str, Any]],
+    user_message: str,
+    conversation_id: str,
     headers,
 ) -> StreamingResponse:
     """Handle streaming chat completion request."""
@@ -108,14 +112,11 @@ async def _handle_streaming_response(
             _collect_streaming_content(chunk, collected_content)
             yield chunk
 
-        # After streaming completes, store in memory
+        # After streaming completes, process conversation
         if collected_content:
             full_content = "".join(collected_content)
             if full_content:
-                await _store_conversation(
-                    messages=original_messages,
-                    response_content=full_content,
-                )
+                await process_conversation(conversation_id, user_message, full_content)
 
     return StreamingResponse(
         generate(),
@@ -165,15 +166,6 @@ def _cheat_messages(
             break
 
     return enhanced_messages
-
-
-async def _store_conversation(
-    messages: list[dict[str, Any]],
-    response_content: str,
-    metadata: dict[str, Any] | None = None,
-) -> str:
-    logger.debug(response_content)
-    return ""
 
 
 def _extract_assistant_content(response: dict[str, Any]) -> str:
