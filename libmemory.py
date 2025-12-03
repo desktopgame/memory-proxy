@@ -153,7 +153,8 @@ class MemorySystem:
         self._embedding_fn = LMStudioEmbeddingFunction(EMBEDDING_URL, EMBEDDING_MODEL)
 
         # Initialize ChromaDB
-        self._chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+        chroma_setting = chromadb.Settings(anonymized_telemetry=False)
+        self._chroma_client = chromadb.PersistentClient(path=CHROMA_PATH, settings=chroma_setting)
         self._user_collection = self._chroma_client.get_or_create_collection(
             name="user_messages",
             embedding_function=self._embedding_fn,
