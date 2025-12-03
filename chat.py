@@ -33,7 +33,7 @@ async def chat_completions(request: Request):
     user_message = _get_user_message(messages)
     logger.debug(f"User message: {user_message}")
     
-    memory_context = load_memory(user_message)
+    memory_context = await load_memory(user_message)
     enhanced_messages = _cheat_messages(messages, memory_context)
 
     # Save user message to memory and get conversation_id

@@ -273,13 +273,13 @@ class MemorySystem:
 
         logger.debug(f"Updated assistant message for {conversation_id}")
 
-    def load_memory(self, query: str, n_results: int = 5) -> str:
+    async def load_memory(self, query: str, n_results: int = 5) -> str:
         """
         Load relevant memories based on the query.
         
         This method:
         1. Searches the knowledge graph for related entities
-        2. Expands the search query with related entities
+        2. Uses LLM to generate an optimized search query
         3. Performs semantic search on RAG
         4. Returns formatted memory context
         
@@ -296,9 +296,9 @@ class MemorySystem:
         related_entities = self._get_related_entities(query)
         logger.debug(f"Related entities: {related_entities}")
 
-        # Expand query with related entities
-        expanded_query = self._expand_query(query, related_entities)
-        logger.debug(f"Expanded query: {expanded_query}")
+        # Use LLM to generate optimized search query
+        expanded_query = await self._generate_search_query(query, related_entities)
+        logger.debug(f"Generated search query: {expanded_query}")
 
         # Search RAG
         results = self._user_collection.query(
@@ -427,14 +427,82 @@ class MemorySystem:
 
         return list(related)
 
-    def _expand_query(self, query: str, related_entities: list[str]) -> str:
-        """Expand query with related entities."""
-        if not related_entities:
-            return query
+    async def _generate_search_query(self, user_query: str, related_entities: list[str]) -> str:
+        """
+        Use LLM to generate an optimized search query for RAG.
         
-        # Simple expansion: append related entities to query
-        entities_str = ", ".join(related_entities[:5])  # Limit to 5 entities
-        return f"{query} (関連: {entities_str})"
+        Args:
+            user_query: The user's current message
+            related_entities: Related entities from knowledge graph
+            
+        Returns:
+            Optimized search query string
+        """
+        # If no related entities and short query, use original
+        if not related_entities and len(user_query) < 50:
+            return user_query
+
+        entities_context = ""
+        if related_entities:
+            entities_str = ", ".join(related_entities[:10])
+            entities_context = f"\n\n関連するエンティティ（ナレッジグラフから）: {entities_str}"
+
+        prompt = f"""以下のユーザーの発言に対して、過去の会話履歴を検索するための最適な検索クエリを生成してください。
+検索クエリは、ユーザーの意図を捉えつつ、関連する記憶を見つけやすいように言い換えや拡張を行ってください。
+{entities_context}
+
+ユーザーの発言: {user_query}
+
+検索クエリを生成してください。"""
+
+        # JSON Schema for structured output
+        json_schema = {
+            "name": "search_query_generation",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "search_query": {
+                        "type": "string",
+                        "description": "Optimized search query for RAG"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of why this query was generated"
+                    }
+                },
+                "required": ["search_query", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+
+        try:
+            response = await self._llm_client.chat.completions.create(
+                model="default",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=200,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                }
+            )
+            
+            content = response.choices[0].message.content
+            if content:
+                result = json.loads(content)
+                search_query = result.get("search_query", user_query)
+                reasoning = result.get("reasoning", "")
+                logger.debug(f"Search query reasoning: {reasoning}")
+                return search_query
+        except Exception as e:
+            logger.warning(f"Search query generation failed: {e}, using original query")
+
+        # Fallback: simple expansion
+        if related_entities:
+            entities_str = ", ".join(related_entities[:5])
+            return f"{user_query} {entities_str}"
+        return user_query
 
     def _get_assistant_response(self, conversation_id: str) -> str | None:
         """Get assistant response for a conversation from SQLite."""
@@ -575,7 +643,7 @@ def save_memory(input_text: str) -> str:
     return get_memory_system().save_memory(input_text)
 
 
-def load_memory(input_text: str) -> str:
+async def load_memory(input_text: str) -> str:
     """
     Load relevant memories for the given input.
     
@@ -585,7 +653,7 @@ def load_memory(input_text: str) -> str:
     Returns:
         Formatted memory context to append to prompt
     """
-    return get_memory_system().load_memory(input_text)
+    return await get_memory_system().load_memory(input_text)
 
 
 async def process_conversation(conversation_id: str, user_message: str, assistant_message: str):
