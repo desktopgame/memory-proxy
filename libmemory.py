@@ -17,6 +17,7 @@ from typing import Any
 import chromadb
 from chromadb.api.types import EmbeddingFunction, Embeddings, Documents
 import httpx
+from openai import AsyncOpenAI
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
@@ -139,7 +140,7 @@ class MemorySystem:
         self._user_collection: chromadb.Collection | None = None
         self._assistant_collection: chromadb.Collection | None = None
         self._db_session: sessionmaker | None = None
-        self._llm_client: httpx.AsyncClient | None = None
+        self._llm_client: AsyncOpenAI | None = None
 
     def _ensure_initialized(self):
         """Lazy initialization of all components."""
@@ -169,10 +170,11 @@ class MemorySystem:
         Base.metadata.create_all(engine)
         self._db_session = sessionmaker(bind=engine)
 
-        # Initialize LLM client
-        self._llm_client = httpx.AsyncClient(
-            base_url=DELEGATE_URL,
-            timeout=httpx.Timeout(120.0, connect=10.0),
+        # Initialize LLM client (OpenAI-compatible)
+        self._llm_client = AsyncOpenAI(
+            base_url=f"{DELEGATE_URL}/v1",
+            api_key="not-needed",  # Local server doesn't require API key
+            timeout=120.0,
         )
 
         self._initialized = True
@@ -181,7 +183,7 @@ class MemorySystem:
     async def close(self):
         """Close all connections."""
         if self._llm_client:
-            await self._llm_client.aclose()
+            await self._llm_client.close()
 
     # -------------------------------------------------------------------------
     # Public API
@@ -451,7 +453,7 @@ class MemorySystem:
         Use LLM to extract entities and relations from a conversation.
         
         Returns:
-            List of dicts with keys: source, target, relation_type
+            List of dicts with keys: source, target, relation
         """
         self._ensure_initialized()
 
@@ -461,36 +463,58 @@ class MemorySystem:
 ユーザー: {user_message}
 アシスタント: {assistant_message}
 
-JSONフォーマットで出力してください:
-{{"entities": [
-    {{"source": "エンティティ1", "target": "エンティティ2", "relation": "関係の種類"}}
-]}}
+関係の種類の例: related_to, likes, dislikes, knows, studies, works_on, lives_in など"""
 
-関係の種類の例: related_to, likes, dislikes, knows, studies, works_on, lives_in など
-
-JSON:"""
+        # JSON Schema for structured output
+        json_schema = {
+            "name": "entity_extraction",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": {
+                                    "type": "string",
+                                    "description": "Source entity name"
+                                },
+                                "target": {
+                                    "type": "string",
+                                    "description": "Target entity name"
+                                },
+                                "relation": {
+                                    "type": "string",
+                                    "description": "Type of relation between entities"
+                                }
+                            },
+                            "required": ["source", "target", "relation"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                "required": ["entities"],
+                "additionalProperties": False
+            }
+        }
 
         try:
-            response = await self._llm_client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "default",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                    "max_tokens": 500,
-                },
+            response = await self._llm_client.chat.completions.create(
+                model="default",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=500,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                }
             )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-
-            # Parse JSON from response
-            # Try to find JSON in the response
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                json_str = content[start:end]
-                result = json.loads(json_str)
+            
+            content = response.choices[0].message.content
+            if content:
+                result = json.loads(content)
                 return result.get("entities", [])
         except Exception as e:
             logger.warning(f"Entity extraction failed: {e}")
