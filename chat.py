@@ -36,8 +36,8 @@ async def chat_completions(request: Request):
     memory_context = await load_memory(user_message)
     enhanced_messages = _cheat_messages(messages, memory_context)
 
-    # Save user message to memory and get conversation_id
-    conversation_id = save_memory(user_message)
+    # Save user message to memory and get conversation_id (with messages for chain tracking)
+    conversation_id = save_memory(user_message, messages=messages)
     logger.debug(f"Saved conversation: {conversation_id}")
 
     # Update body with enhanced messages

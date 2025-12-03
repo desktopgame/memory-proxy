@@ -7,6 +7,7 @@ Architecture:
 - LLM: llama.cpp server for entity extraction and query generation
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -119,7 +120,46 @@ class ConversationRecord(Base):
     id = Column(String(36), primary_key=True)  # UUID
     user_message = Column(Text, nullable=False)
     assistant_message = Column(Text, nullable=True)
+    messages_hash = Column(String(16), index=True, nullable=True)  # Hash of messages array
+    parent_hash = Column(String(16), index=True, nullable=True)  # Hash of parent messages
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# =============================================================================
+# Hash Utilities
+# =============================================================================
+
+
+def compute_messages_hash(messages: list[dict[str, Any]]) -> str:
+    """
+    Compute hash of messages array for conversation chain tracking.
+    
+    Args:
+        messages: OpenAI-style messages array
+        
+    Returns:
+        16-character hash string
+    """
+    # Sort keys and minify for consistent hashing
+    normalized = json.dumps(messages, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def compute_parent_hash(messages: list[dict[str, Any]]) -> str | None:
+    """
+    Compute hash of parent messages (without last user message).
+    
+    Args:
+        messages: OpenAI-style messages array
+        
+    Returns:
+        16-character hash string, or None if no parent
+    """
+    if len(messages) <= 1:
+        return None
+    # Remove last message (the current user message)
+    parent_messages = messages[:-1]
+    return compute_messages_hash(parent_messages)
 
 
 # =============================================================================
@@ -193,12 +233,18 @@ class MemorySystem:
     # Public API
     # -------------------------------------------------------------------------
 
-    def save_memory(self, user_message: str, assistant_message: str | None = None) -> str:
+    def save_memory(
+        self,
+        user_message: str,
+        messages: list[dict[str, Any]] | None = None,
+        assistant_message: str | None = None,
+    ) -> str:
         """
         Save a conversation turn to memory.
         
         Args:
             user_message: The user's message
+            messages: OpenAI-style messages array (for conversation chain tracking)
             assistant_message: The assistant's response (optional, can be added later)
             
         Returns:
@@ -209,6 +255,14 @@ class MemorySystem:
         conversation_id = str(uuid.uuid4())
         timestamp = datetime.utcnow().isoformat()
 
+        # Compute hashes for conversation chain tracking
+        messages_hash = None
+        parent_hash = None
+        if messages:
+            messages_hash = compute_messages_hash(messages)
+            parent_hash = compute_parent_hash(messages)
+            logger.debug(f"Messages hash: {messages_hash}, Parent hash: {parent_hash}")
+
         # Save to ChromaDB (user message)
         self._user_collection.add(
             ids=[conversation_id],
@@ -217,6 +271,8 @@ class MemorySystem:
                 "conversation_id": conversation_id,
                 "timestamp": timestamp,
                 "role": "user",
+                "messages_hash": messages_hash or "",
+                "parent_hash": parent_hash or "",
             }],
         )
 
@@ -238,6 +294,8 @@ class MemorySystem:
                 id=conversation_id,
                 user_message=user_message,
                 assistant_message=assistant_message,
+                messages_hash=messages_hash,
+                parent_hash=parent_hash,
             )
             session.add(record)
             session.commit()
@@ -533,6 +591,89 @@ class MemorySystem:
         return None
 
     # -------------------------------------------------------------------------
+    # Conversation Chain Operations
+    # -------------------------------------------------------------------------
+
+    def _get_conversation_chain(
+        self,
+        conversation_id: str,
+        depth_before: int = 2,
+        depth_after: int = 2,
+    ) -> list[ConversationRecord]:
+        """
+        Get conversation chain (before and after) for a given conversation.
+        
+        Args:
+            conversation_id: UUID of the center conversation
+            depth_before: How many previous conversations to retrieve
+            depth_after: How many next conversations to retrieve
+            
+        Returns:
+            List of ConversationRecord ordered chronologically
+        """
+        self._ensure_initialized()
+
+        chain = []
+
+        with self._db_session() as session:
+            current = session.query(ConversationRecord).filter_by(id=conversation_id).first()
+            if not current:
+                return chain
+
+            # Traverse backwards (previous conversations)
+            prev_records = []
+            prev = current
+            for _ in range(depth_before):
+                if not prev.parent_hash:
+                    break
+                parent = session.query(ConversationRecord).filter_by(
+                    messages_hash=prev.parent_hash
+                ).first()
+                if parent:
+                    prev_records.insert(0, parent)
+                    prev = parent
+                else:
+                    break
+
+            # Traverse forwards (next conversations)
+            next_records = []
+            next_conv = session.query(ConversationRecord).filter_by(
+                parent_hash=current.messages_hash
+            ).first() if current.messages_hash else None
+            for _ in range(depth_after):
+                if next_conv:
+                    next_records.append(next_conv)
+                    next_conv = session.query(ConversationRecord).filter_by(
+                        parent_hash=next_conv.messages_hash
+                    ).first() if next_conv.messages_hash else None
+                else:
+                    break
+
+            # Combine: prev + current + next
+            chain = prev_records + [current] + next_records
+
+        return chain
+
+    def _format_conversation_chain(
+        self,
+        chain: list[ConversationRecord],
+        center_index: int,
+    ) -> str:
+        """Format conversation chain for memory context."""
+        if not chain:
+            return ""
+
+        entries = []
+        for i, record in enumerate(chain):
+            marker = "→" if i == center_index else " "
+            entry = f"{marker} User: {record.user_message}"
+            if record.assistant_message:
+                entry += f"\n  Assistant: {record.assistant_message}"
+            entries.append(entry)
+
+        return "\n".join(entries)
+
+    # -------------------------------------------------------------------------
     # LLM Operations (for entity extraction)
     # -------------------------------------------------------------------------
 
@@ -650,17 +791,18 @@ def get_memory_system() -> MemorySystem:
     return _memory_system
 
 
-def save_memory(input_text: str) -> str:
+def save_memory(input_text: str, messages: list[dict[str, Any]] | None = None) -> str:
     """
     Save user message to memory.
     
     Args:
         input_text: User's message
+        messages: OpenAI-style messages array (for conversation chain tracking)
         
     Returns:
         conversation_id for later use
     """
-    return get_memory_system().save_memory(input_text)
+    return get_memory_system().save_memory(input_text, messages=messages)
 
 
 async def load_memory(input_text: str) -> str:
