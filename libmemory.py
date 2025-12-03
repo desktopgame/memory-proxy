@@ -40,9 +40,14 @@ CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_data")
 
 # Time decay configuration
 # Half-life in hours: after this time, the score is halved
-TIME_DECAY_HALF_LIFE_HOURS = float(os.getenv("TIME_DECAY_HALF_LIFE_HOURS", "720"))  # 1 week default
+TIME_DECAY_HALF_LIFE_HOURS = float(os.getenv("TIME_DECAY_HALF_LIFE_HOURS", "720"))  # 30 days default
 # Weight for time decay (0.0 = no decay, 1.0 = full decay effect)
 TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
+
+# Distance threshold for memory relevance
+# Memories with adjusted distance above this threshold are excluded
+# ChromaDB L2 distance: 0 = identical, ~2 = very different
+MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.5"))
 
 
 # =============================================================================
@@ -485,9 +490,22 @@ class MemorySystem:
 
         # Sort by adjusted distance (lower = better)
         ranked_results.sort(key=lambda x: x["adjusted_distance"])
-        ranked_results = ranked_results[:n_results]  # Take top n_results
 
-        logger.debug(f"Reranked {len(ranked_results)} results with time decay")
+        # Filter by distance threshold
+        filtered_results = [
+            r for r in ranked_results
+            if r["adjusted_distance"] <= MEMORY_DISTANCE_THRESHOLD
+        ]
+
+        # Take top n_results from filtered
+        filtered_results = filtered_results[:n_results]
+
+        logger.debug(
+            f"Reranked {len(ranked_results)} results, "
+            f"{len(filtered_results)} passed threshold ({MEMORY_DISTANCE_THRESHOLD})"
+        )
+
+        ranked_results = filtered_results
 
         # Format results with conversation chain
         memories = []
