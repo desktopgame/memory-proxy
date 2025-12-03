@@ -63,25 +63,35 @@ def compute_time_decay(timestamp_str: str, half_life_hours: float = TIME_DECAY_H
     Returns:
         Decay factor between 0.0 and 1.0 (1.0 = no decay, 0.0 = fully decayed)
     """
+    from datetime import timezone
+    
     try:
-        # Parse timestamp
-        if "T" in timestamp_str:
-            created_at = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        else:
-            created_at = datetime.fromisoformat(timestamp_str)
+        # Parse timestamp - handle various formats
+        timestamp_str = timestamp_str.strip()
         
-        # Make both datetimes timezone-naive for comparison
-        if created_at.tzinfo is not None:
-            created_at = created_at.replace(tzinfo=None)
+        # Replace Z with +00:00 for proper parsing
+        if timestamp_str.endswith("Z"):
+            timestamp_str = timestamp_str[:-1] + "+00:00"
         
+        created_at = datetime.fromisoformat(timestamp_str)
+        
+        # Make timezone-aware if not already (assume UTC)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        
+        # Get current time in UTC
         now = datetime.now(timezone.utc)
         elapsed_hours = (now - created_at).total_seconds() / 3600.0
+        
+        # Ensure non-negative elapsed time
+        if elapsed_hours < 0:
+            elapsed_hours = 0
         
         # Exponential decay: 0.5 ^ (elapsed / half_life)
         decay = math.pow(0.5, elapsed_hours / half_life_hours)
         return decay
     except Exception as e:
-        logger.warning(f"Failed to compute time decay: {e}")
+        logger.warning(f"Failed to compute time decay for '{timestamp_str}': {e}")
         return 1.0  # No decay on error
 
 
