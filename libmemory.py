@@ -870,6 +870,7 @@ class MemorySystem:
                     "json_schema": json_schema
                 }
             )
+            logger.debug(f"graph={response.choices[0].message.content}")
             
             content = response.choices[0].message.content
             if content:
