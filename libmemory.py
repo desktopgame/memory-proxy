@@ -13,7 +13,7 @@ import logging
 import math
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import chromadb
@@ -74,7 +74,7 @@ def compute_time_decay(timestamp_str: str, half_life_hours: float = TIME_DECAY_H
         if created_at.tzinfo is not None:
             created_at = created_at.replace(tzinfo=None)
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         elapsed_hours = (now - created_at).total_seconds() / 3600.0
         
         # Exponential decay: 0.5 ^ (elapsed / half_life)
@@ -158,7 +158,7 @@ class Entity(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     entity_type = Column(String(100), nullable=True)  # e.g., "person", "topic", "place"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     # Relationships
     outgoing_relations = relationship(
@@ -178,7 +178,7 @@ class Relation(Base):
     source_id = Column(Integer, ForeignKey("entities.id"), nullable=False, index=True)
     target_id = Column(Integer, ForeignKey("entities.id"), nullable=False, index=True)
     relation_type = Column(String(100), nullable=False)  # e.g., "related_to", "likes"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     # Relationships
     source = relationship("Entity", foreign_keys=[source_id], back_populates="outgoing_relations")
@@ -195,7 +195,7 @@ class ConversationRecord(Base):
     assistant_message = Column(Text, nullable=True)
     messages_hash = Column(String(16), index=True, nullable=True)  # Hash of messages array
     parent_hash = Column(String(16), index=True, nullable=True)  # Hash of parent messages
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
 
 # =============================================================================
@@ -326,7 +326,7 @@ class MemorySystem:
         self._ensure_initialized()
 
         conversation_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         # Compute hashes for conversation chain tracking
         messages_hash = None
@@ -386,7 +386,7 @@ class MemorySystem:
         """
         self._ensure_initialized()
 
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         # Add to ChromaDB
         self._assistant_collection.add(
