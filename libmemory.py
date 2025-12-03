@@ -21,6 +21,8 @@ from openai import AsyncOpenAI
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+from libword import extract_keywords_mecab
+
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -387,6 +389,9 @@ class MemorySystem:
         """
         Find entities in text and get their related entities from the graph.
         
+        Uses MeCab to extract keywords from text, then matches them against
+        entities in the knowledge graph.
+        
         Args:
             text: Text to search for entities
             max_depth: How many hops to traverse in the graph
@@ -398,10 +403,23 @@ class MemorySystem:
 
         related = set()
 
+        # Extract keywords from text using MeCab
+        keywords = extract_keywords_mecab(text)
+        logger.debug(f"Extracted keywords: {keywords}")
+
         with self._db_session() as session:
-            # Find entities mentioned in text (simple substring match for now)
+            # Find entities that match extracted keywords
             all_entities = session.query(Entity).all()
-            mentioned = [e for e in all_entities if e.name.lower() in text.lower()]
+            mentioned = []
+            for entity in all_entities:
+                entity_name_lower = entity.name.lower()
+                # Match if entity name is in keywords or keywords contain entity name
+                for keyword in keywords:
+                    if keyword == entity_name_lower or keyword in entity_name_lower or entity_name_lower in keyword:
+                        mentioned.append(entity)
+                        break
+
+            logger.debug(f"Matched entities: {[e.name for e in mentioned]}")
 
             # BFS to find related entities
             to_visit = [(e, 0) for e in mentioned]
