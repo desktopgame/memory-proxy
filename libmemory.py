@@ -47,7 +47,7 @@ TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
 # Distance threshold for memory relevance
 # Memories with adjusted distance above this threshold are excluded
 # ChromaDB L2 distance: 0 = identical, ~2 = very different
-MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.5"))
+MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.0"))
 
 
 # =============================================================================
@@ -591,7 +591,7 @@ class MemorySystem:
             session.add(relation)
             session.commit()
 
-    def _get_related_entities(self, text: str, max_depth: int = 3) -> list[str]:
+    def _get_related_entities(self, text: str, max_depth: int = 2) -> list[str]:
         """
         Find entities in text and get their related entities from the graph.
         
