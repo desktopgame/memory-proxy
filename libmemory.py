@@ -10,6 +10,7 @@ Architecture:
 import hashlib
 import json
 import logging
+import math
 import os
 import uuid
 from datetime import datetime
@@ -36,6 +37,78 @@ EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://localhost:1234")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "memory.db")
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_data")
+
+# Time decay configuration
+# Half-life in hours: after this time, the score is halved
+TIME_DECAY_HALF_LIFE_HOURS = float(os.getenv("TIME_DECAY_HALF_LIFE_HOURS", "168"))  # 1 week default
+# Weight for time decay (0.0 = no decay, 1.0 = full decay effect)
+TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
+
+
+# =============================================================================
+# Time Decay Utilities
+# =============================================================================
+
+
+def compute_time_decay(timestamp_str: str, half_life_hours: float = TIME_DECAY_HALF_LIFE_HOURS) -> float:
+    """
+    Compute time decay factor based on elapsed time.
+    
+    Uses exponential decay with half-life: decay = 0.5 ^ (hours / half_life)
+    
+    Args:
+        timestamp_str: ISO format timestamp string
+        half_life_hours: Time in hours for score to decay by half
+        
+    Returns:
+        Decay factor between 0.0 and 1.0 (1.0 = no decay, 0.0 = fully decayed)
+    """
+    try:
+        # Parse timestamp
+        if "T" in timestamp_str:
+            created_at = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        else:
+            created_at = datetime.fromisoformat(timestamp_str)
+        
+        # Make both datetimes timezone-naive for comparison
+        if created_at.tzinfo is not None:
+            created_at = created_at.replace(tzinfo=None)
+        
+        now = datetime.utcnow()
+        elapsed_hours = (now - created_at).total_seconds() / 3600.0
+        
+        # Exponential decay: 0.5 ^ (elapsed / half_life)
+        decay = math.pow(0.5, elapsed_hours / half_life_hours)
+        return decay
+    except Exception as e:
+        logger.warning(f"Failed to compute time decay: {e}")
+        return 1.0  # No decay on error
+
+
+def apply_time_decay_to_distance(
+    distance: float,
+    decay_factor: float,
+    weight: float = TIME_DECAY_WEIGHT,
+) -> float:
+    """
+    Apply time decay to ChromaDB distance score.
+    
+    Lower distance = more similar. We increase distance for older memories.
+    adjusted_distance = distance + (1 - decay_factor) * weight * max_distance_penalty
+    
+    Args:
+        distance: Original ChromaDB distance (lower = more similar)
+        decay_factor: Time decay factor (1.0 = new, 0.0 = old)
+        weight: How much time decay affects the score (0.0-1.0)
+        
+    Returns:
+        Adjusted distance (higher for older memories)
+    """
+    # Penalty increases as decay_factor decreases (older memories)
+    # max_distance_penalty is set to 2.0 to allow significant reranking
+    max_penalty = 2.0
+    penalty = (1.0 - decay_factor) * weight * max_penalty
+    return distance + penalty
 
 # =============================================================================
 # LMStudio Embedding Function for ChromaDB
@@ -371,23 +444,46 @@ class MemorySystem:
         expanded_query = await self._generate_search_query(query, related_entities)
         logger.debug(f"Generated search query: {expanded_query}")
 
-        # Search RAG
+        # Search RAG (fetch more results for reranking)
+        fetch_count = n_results * 3  # Fetch more to allow time decay to rerank
         results = self._user_collection.query(
             query_texts=[expanded_query],
-            n_results=n_results,
+            n_results=fetch_count,
             include=["documents", "metadatas", "distances"],
         )
 
         if not results["documents"] or not results["documents"][0]:
             return ""
 
-        # Format results with conversation chain
-        memories = []
-        for i, (doc, metadata, distance) in enumerate(zip(
+        # Apply time decay and rerank
+        ranked_results = []
+        for doc, metadata, distance in zip(
             results["documents"][0],
             results["metadatas"][0],
             results["distances"][0],
-        )):
+        ):
+            timestamp = metadata.get("timestamp", "")
+            decay_factor = compute_time_decay(timestamp) if timestamp else 1.0
+            adjusted_distance = apply_time_decay_to_distance(distance, decay_factor)
+            ranked_results.append({
+                "doc": doc,
+                "metadata": metadata,
+                "original_distance": distance,
+                "adjusted_distance": adjusted_distance,
+                "decay_factor": decay_factor,
+            })
+
+        # Sort by adjusted distance (lower = better)
+        ranked_results.sort(key=lambda x: x["adjusted_distance"])
+        ranked_results = ranked_results[:n_results]  # Take top n_results
+
+        logger.debug(f"Reranked {len(ranked_results)} results with time decay")
+
+        # Format results with conversation chain
+        memories = []
+        for i, result in enumerate(ranked_results):
+            metadata = result["metadata"]
+            doc = result["doc"]
             conversation_id = metadata.get("conversation_id")
             
             # Get conversation chain (before and after)
