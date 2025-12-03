@@ -13,7 +13,6 @@ EXTRACT_POS_PATTERNS = [
     "名詞,固有名詞",
     "名詞,サ変接続",
     "名詞,形容動詞語幹",
-    "名詞,代名詞",  # 私, 僕, あなた, etc.
 ]
 # Minimum keyword length
 MIN_KEYWORD_LENGTH = 1
