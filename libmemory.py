@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 DELEGATE_URL = os.getenv("DELEGATE_URL", "http://localhost:7071")
+SUPPORT_MODEL = os.getenv("SUPPORT_MODEL", "")
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://localhost:1234")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "memory.db")
@@ -479,7 +480,7 @@ class MemorySystem:
 
         try:
             response = await self._llm_client.chat.completions.create(
-                model="default",
+                model=SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=200,
@@ -571,7 +572,7 @@ class MemorySystem:
 
         try:
             response = await self._llm_client.chat.completions.create(
-                model="default",
+                model=SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=500,
