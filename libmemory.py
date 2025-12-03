@@ -40,7 +40,7 @@ CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_data")
 
 # Time decay configuration
 # Half-life in hours: after this time, the score is halved
-TIME_DECAY_HALF_LIFE_HOURS = float(os.getenv("TIME_DECAY_HALF_LIFE_HOURS", "168"))  # 1 week default
+TIME_DECAY_HALF_LIFE_HOURS = float(os.getenv("TIME_DECAY_HALF_LIFE_HOURS", "720"))  # 1 week default
 # Weight for time decay (0.0 = no decay, 1.0 = full decay effect)
 TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
 
