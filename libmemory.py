@@ -561,6 +561,11 @@ class MemorySystem:
         if not memories:
             return ""
 
+        for i, memory in enumerate(memories):
+            logger.debug(f"[Memory {i}]")
+            logger.debug(memory)
+            logger.debug("---")
+
         return "\n\n---\n\n".join([
             "\n\n<memories>",
             "以下は過去の会話から検索された関連する記憶です（前後の文脈を含む）：",
