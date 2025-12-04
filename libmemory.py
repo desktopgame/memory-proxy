@@ -479,7 +479,7 @@ class MemorySystem:
         self._ensure_initialized()
 
         # Get related entities from knowledge graph
-        related_entities = self._get_related_entities(query)
+        related_entities = self._get_related_entities(query, top_k=1, random_k=4)
         logger.debug(f"Related entities: {related_entities}")
 
         # Use LLM to generate optimized search query
