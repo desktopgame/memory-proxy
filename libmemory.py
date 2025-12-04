@@ -50,6 +50,11 @@ TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
 # ChromaDB L2 distance: 0 = identical, ~2 = very different
 MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.0"))
 
+# Duplicate detection threshold for memory search results
+# Results with cosine similarity above this threshold are considered duplicates
+# Cosine similarity: 1.0 = identical, 0.0 = orthogonal, -1.0 = opposite
+MEMORY_DUPLICATE_THRESHOLD = float(os.getenv("MEMORY_DUPLICATE_THRESHOLD", "0.9"))
+
 
 # =============================================================================
 # Time Decay Utilities
@@ -480,12 +485,12 @@ class MemorySystem:
         expanded_query = await self._generate_search_query(query, related_entities)
         logger.debug(f"Generated search query: {expanded_query}")
 
-        # Search RAG (fetch more results for reranking)
-        fetch_count = n_results * 3  # Fetch more to allow time decay to rerank
+        # Search RAG (fetch more results for reranking and deduplication)
+        fetch_count = n_results * 5  # Fetch more to allow for filtering and deduplication
         results = self._user_collection.query(
             query_texts=[expanded_query],
             n_results=fetch_count,
-            include=["documents", "metadatas", "distances"],
+            include=["documents", "metadatas", "distances", "embeddings"],
         )
 
         if not results["documents"] or not results["documents"][0]:
@@ -493,20 +498,28 @@ class MemorySystem:
 
         # Apply time decay and rerank
         ranked_results = []
-        for doc, metadata, distance in zip(
+        for i, (doc, metadata, distance) in enumerate(zip(
             results["documents"][0],
             results["metadatas"][0],
             results["distances"][0],
-        ):
+        )):
             timestamp = metadata.get("timestamp", "")
             decay_factor = compute_time_decay(timestamp) if timestamp else 1.0
             adjusted_distance = apply_time_decay_to_distance(distance, decay_factor)
+            
+            # Get embedding if available
+            embedding = None
+            if results.get("embeddings") is not None and len(results["embeddings"]) > 0:
+                if results["embeddings"][0] is not None and len(results["embeddings"][0]) > i:
+                    embedding = np.array(results["embeddings"][0][i])
+            
             ranked_results.append({
                 "doc": doc,
                 "metadata": metadata,
                 "original_distance": distance,
                 "adjusted_distance": adjusted_distance,
                 "decay_factor": decay_factor,
+                "embedding": embedding,
             })
 
         # Sort by adjusted distance (lower = better)
@@ -518,15 +531,38 @@ class MemorySystem:
             if r["adjusted_distance"] <= MEMORY_DISTANCE_THRESHOLD
         ]
 
-        # Take top n_results from filtered
-        filtered_results = filtered_results[:n_results]
-
         logger.debug(
             f"Reranked {len(ranked_results)} results, "
             f"{len(filtered_results)} passed threshold ({MEMORY_DISTANCE_THRESHOLD})"
         )
 
-        ranked_results = filtered_results
+        # Remove duplicates based on cosine similarity
+        deduplicated_results = []
+        for result in filtered_results:
+            is_duplicate = False
+            if result["embedding"] is not None:
+                for selected in deduplicated_results:
+                    if selected["embedding"] is not None:
+                        similarity = cosine_similarity(result["embedding"], selected["embedding"])
+                        if similarity >= MEMORY_DUPLICATE_THRESHOLD:
+                            is_duplicate = True
+                            logger.debug(
+                                f"Duplicate detected (similarity={similarity:.3f}): "
+                                f"'{result['doc'][:50]}...' similar to '{selected['doc'][:50]}...'"
+                            )
+                            break
+            
+            if not is_duplicate:
+                deduplicated_results.append(result)
+                if len(deduplicated_results) >= n_results:
+                    break
+
+        logger.debug(
+            f"After deduplication: {len(deduplicated_results)} results "
+            f"(removed {len(filtered_results) - len(deduplicated_results)} duplicates)"
+        )
+
+        ranked_results = deduplicated_results
 
         # Format results with conversation chain
         memories = []
