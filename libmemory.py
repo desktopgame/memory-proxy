@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 DELEGATE_URL = os.getenv("DELEGATE_URL", "http://localhost:7071")
 SUPPORT_MODEL = os.getenv("SUPPORT_MODEL", "")
+COMPRESS_MODEL = os.getenv("COMPRESS_MODEL", "")  # Model for compressing/summarizing text
+COMPRESS_MAX_LENGTH = int(os.getenv("COMPRESS_MAX_LENGTH", "200"))  # Max chars for compressed text
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://localhost:1234")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "memory.db")
@@ -1035,6 +1037,60 @@ class MemorySystem:
     # LLM Operations (for entity extraction)
     # -------------------------------------------------------------------------
 
+    async def compress_text(self, text: str, role: str = "user") -> str:
+        """
+        Compress/summarize text using COMPRESS_MODEL.
+        
+        If text is already short enough or COMPRESS_MODEL is not set,
+        returns the original text.
+        
+        Args:
+            text: Text to compress
+            role: Role of the speaker ("user" or "assistant")
+            
+        Returns:
+            Compressed text (max COMPRESS_MAX_LENGTH chars)
+        """
+        # Skip compression if model not configured or text is short
+        if not COMPRESS_MODEL or len(text) <= COMPRESS_MAX_LENGTH:
+            return text
+
+        self._ensure_initialized()
+
+        role_desc = "ユーザーの発言" if role == "user" else "アシスタントの返答"
+        
+        prompt = f"""以下の{role_desc}を{COMPRESS_MAX_LENGTH}文字以内に要約してください。
+重要な情報（固有名詞、数値、事実）を優先的に残してください。
+
+元のテキスト:
+{text}
+
+要約:"""
+
+        try:
+            response = await self._llm_client.chat.completions.create(
+                model=COMPRESS_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=COMPRESS_MAX_LENGTH * 2,  # Allow some buffer
+            )
+            
+            content = response.choices[0].message.content
+            if content:
+                compressed = content.strip()
+                # Truncate if still too long
+                if len(compressed) > COMPRESS_MAX_LENGTH:
+                    compressed = compressed[:COMPRESS_MAX_LENGTH - 3] + "..."
+                logger.debug(f"Compressed {role} message: {len(text)} -> {len(compressed)} chars")
+                return compressed
+        except Exception as e:
+            logger.warning(f"Text compression failed: {e}, using truncation")
+
+        # Fallback: simple truncation
+        if len(text) > COMPRESS_MAX_LENGTH:
+            return text[:COMPRESS_MAX_LENGTH - 3] + "..."
+        return text
+
     async def extract_entities_and_relations(self, user_message: str, assistant_message: str) -> list[dict]:
         """
         Use LLM to extract entities and relations from a conversation.
@@ -1110,17 +1166,71 @@ class MemorySystem:
 
     async def process_conversation(self, conversation_id: str, user_message: str, assistant_message: str):
         """
-        Process a completed conversation: extract entities and update knowledge graph.
+        Process a completed conversation: compress, extract entities, and update storage.
+        
+        This method:
+        1. Compresses user message and assistant message individually (if COMPRESS_MODEL is set)
+        2. Updates ChromaDB and SQLite with compressed versions
+        3. Extracts entities and relations from original messages
+        4. Updates knowledge graph
         
         Args:
             conversation_id: UUID of the conversation
-            user_message: The user's message
-            assistant_message: The assistant's response
+            user_message: The user's message (original)
+            assistant_message: The assistant's response (original)
         """
-        # Update assistant message in storage
-        self.update_assistant_message(conversation_id, assistant_message)
+        self._ensure_initialized()
 
-        # Extract entities and relations
+        # Compress both messages individually
+        compressed_user = await self.compress_text(user_message, role="user")
+        compressed_assistant = await self.compress_text(assistant_message, role="assistant")
+
+        logger.debug(f"User message: {len(user_message)} -> {len(compressed_user)} chars")
+        logger.debug(f"Assistant message: {len(assistant_message)} -> {len(compressed_assistant)} chars")
+
+        # Update ChromaDB with compressed user message (delete and re-add)
+        if compressed_user != user_message:
+            try:
+                # Get existing metadata
+                results = self._user_collection.get(ids=[conversation_id], include=["metadatas"])
+                if results["metadatas"] and results["metadatas"][0]:
+                    metadata = results["metadatas"][0]
+                    # Delete old entry
+                    self._user_collection.delete(ids=[conversation_id])
+                    # Add compressed version
+                    self._user_collection.add(
+                        ids=[conversation_id],
+                        documents=[compressed_user],
+                        metadatas=[metadata],
+                    )
+                    logger.debug(f"Updated user message in ChromaDB with compressed version")
+            except Exception as e:
+                logger.warning(f"Failed to update compressed user message: {e}")
+
+        # Update assistant message in ChromaDB
+        timestamp = datetime.now(timezone.utc).isoformat()
+        self._assistant_collection.add(
+            ids=[conversation_id],
+            documents=[compressed_assistant],
+            metadatas=[{
+                "conversation_id": conversation_id,
+                "timestamp": timestamp,
+                "role": "assistant",
+            }],
+        )
+
+        # Update SQLite with compressed versions
+        with self._db_session() as session:
+            record = session.query(ConversationRecord).filter_by(id=conversation_id).first()
+            if record:
+                record.user_message = compressed_user
+                record.assistant_message = compressed_assistant
+                session.commit()
+
+        logger.debug(f"Updated conversation {conversation_id} with compressed messages")
+
+        # Extract entities and relations from ORIGINAL messages (not compressed)
+        # to preserve full context for knowledge graph
         relations = await self.extract_entities_and_relations(user_message, assistant_message)
 
         # Add to knowledge graph
