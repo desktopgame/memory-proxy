@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import random
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -653,7 +654,13 @@ class MemorySystem:
             session.add(relation)
             session.commit()
 
-    def _get_related_entities(self, text: str, max_depth: int = 2, top_k: int = 5) -> list[str]:
+    def _get_related_entities(
+        self,
+        text: str,
+        max_depth: int = 2,
+        top_k: int = 3,
+        random_k: int = 2,
+    ) -> list[str]:
         """
         Find entities in text and get their related entities from the graph.
         
@@ -663,13 +670,17 @@ class MemorySystem:
         
         Final score = graph_score * 0.5 + embedding_similarity * 0.5
         
+        Returns top_k entities by score, plus random_k entities selected via
+        weighted random sampling (higher scores = higher probability).
+        
         Args:
             text: Text to search for entities
             max_depth: How many hops to traverse in the graph
-            top_k: Number of top entities to return
+            top_k: Number of top entities to return (by score)
+            random_k: Number of additional random entities (weighted by score)
             
         Returns:
-            List of top entity names (without scores)
+            List of entity names (top_k + random_k, deduplicated)
         """
         self._ensure_initialized()
 
@@ -753,11 +764,44 @@ class MemorySystem:
             logger.warning(f"Embedding similarity failed: {e}, using graph scores only")
             entity_final_scores = entity_graph_scores
 
-        # Sort by final score descending and return top_k entity names
+        # Sort by final score descending
         sorted_entities = sorted(entity_final_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Select top_k entities by score
         top_entities = [name for name, score in sorted_entities[:top_k]]
+        selected_names = set(top_entities)
+        
+        # Select random_k additional entities via weighted random sampling
+        # Exclude already selected top_k entities
+        remaining_entities = [(name, score) for name, score in sorted_entities[top_k:] if name not in selected_names]
+        
+        random_entities = []
+        if remaining_entities and random_k > 0:
+            # Extract names and weights for weighted sampling
+            names = [name for name, score in remaining_entities]
+            weights = [score for name, score in remaining_entities]
+            
+            # Ensure all weights are positive (add small epsilon if needed)
+            min_weight = min(weights) if weights else 0
+            if min_weight <= 0:
+                weights = [w - min_weight + 0.01 for w in weights]
+            
+            # Sample random_k entities (or fewer if not enough remaining)
+            sample_count = min(random_k, len(names))
+            if sample_count > 0:
+                random_entities = random.choices(names, weights=weights, k=sample_count)
+                # Remove duplicates while preserving order
+                seen = set()
+                random_entities = [x for x in random_entities if not (x in seen or seen.add(x))]
+        
+        # Combine top + random (deduplicated)
+        result = top_entities + [e for e in random_entities if e not in selected_names]
+        
         logger.debug(f"Top {top_k} entities: {top_entities}")
-        return top_entities
+        logger.debug(f"Random {random_k} entities (weighted): {random_entities}")
+        logger.debug(f"Final entities: {result}")
+        
+        return result
 
     async def _generate_search_query(
         self, user_query: str, related_entities: list[str]
