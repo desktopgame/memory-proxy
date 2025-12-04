@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import chromadb
+import numpy as np
 from chromadb.api.types import EmbeddingFunction, Embeddings, Documents
 import httpx
 from openai import AsyncOpenAI
@@ -124,6 +125,26 @@ def apply_time_decay_to_distance(
     max_penalty = 2.0
     penalty = (1.0 - decay_factor) * weight * max_penalty
     return distance + penalty
+
+
+def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """
+    Compute cosine similarity between two vectors using numpy.
+    
+    Args:
+        vec1: First vector
+        vec2: Second vector
+        
+    Returns:
+        Cosine similarity between -1.0 and 1.0 (1.0 = identical)
+    """
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
 # =============================================================================
 # LMStudio Embedding Function for ChromaDB
@@ -591,25 +612,28 @@ class MemorySystem:
             session.add(relation)
             session.commit()
 
-    def _get_related_entities(self, text: str, max_depth: int = 2) -> list[tuple[str, float]]:
+    def _get_related_entities(self, text: str, max_depth: int = 2, top_k: int = 5) -> list[str]:
         """
         Find entities in text and get their related entities from the graph.
         
-        Uses MeCab to extract keywords from text, then matches them against
-        entities in the knowledge graph. Returns entities with weights based
-        on graph distance (exponential decay: 0.5^depth).
+        Scores entities based on:
+        1. Graph distance from mentioned entities (exponential decay: 0.5^depth)
+        2. Cosine similarity between entity name embedding and input text embedding
+        
+        Final score = graph_score * 0.5 + embedding_similarity * 0.5
         
         Args:
             text: Text to search for entities
             max_depth: How many hops to traverse in the graph
+            top_k: Number of top entities to return
             
         Returns:
-            List of tuples (entity_name, weight) sorted by weight descending
+            List of top entity names (without scores)
         """
         self._ensure_initialized()
 
-        # Dictionary to store entity -> weight (keep max weight if found multiple times)
-        entity_weights: dict[str, float] = {}
+        # Dictionary to store entity -> graph_score (keep max score if found multiple times)
+        entity_graph_scores: dict[str, float] = {}
 
         # Extract keywords from text using MeCab
         keywords = extract_keywords_mecab(text)
@@ -639,12 +663,12 @@ class MemorySystem:
                     continue
                 visited_ids.add(entity.id)
                 
-                # Exponential decay weight: 0.5^depth
-                weight = math.pow(0.5, depth)
+                # Exponential decay score based on graph distance: 0.5^depth
+                graph_score = math.pow(0.5, depth)
                 
-                # Keep max weight if entity already exists
-                if entity.name not in entity_weights or entity_weights[entity.name] < weight:
-                    entity_weights[entity.name] = weight
+                # Keep max score if entity already exists
+                if entity.name not in entity_graph_scores or entity_graph_scores[entity.name] < graph_score:
+                    entity_graph_scores[entity.name] = graph_score
 
                 if depth < max_depth:
                     # Get related entities
@@ -659,46 +683,65 @@ class MemorySystem:
                             if source:
                                 to_visit.append((source, depth + 1))
 
-        # Sort by weight descending and return as list of tuples
-        sorted_entities = sorted(entity_weights.items(), key=lambda x: x[1], reverse=True)
-        logger.debug(f"Weighted entities: {sorted_entities}")
-        return sorted_entities
+        if not entity_graph_scores:
+            return []
+
+        # Compute embedding similarity for each entity
+        try:
+            # Get embedding for input text
+            text_embedding = np.array(self._embedding_fn([text])[0])
+            
+            # Get embeddings for all entity names
+            entity_names = list(entity_graph_scores.keys())
+            entity_embeddings = self._embedding_fn(entity_names)
+            
+            # Compute final scores combining graph score and embedding similarity
+            entity_final_scores: dict[str, float] = {}
+            for name, entity_emb in zip(entity_names, entity_embeddings):
+                graph_score = entity_graph_scores[name]
+                embedding_sim = cosine_similarity(text_embedding, np.array(entity_emb))
+                # Normalize embedding similarity from [-1, 1] to [0, 1]
+                embedding_sim_normalized = (embedding_sim + 1.0) / 2.0
+                # Final score: weighted combination
+                final_score = graph_score * 0.5 + embedding_sim_normalized * 0.5
+                entity_final_scores[name] = final_score
+                
+            logger.debug(f"Entity scores (graph+embedding): {entity_final_scores}")
+            
+        except Exception as e:
+            logger.warning(f"Embedding similarity failed: {e}, using graph scores only")
+            entity_final_scores = entity_graph_scores
+
+        # Sort by final score descending and return top_k entity names
+        sorted_entities = sorted(entity_final_scores.items(), key=lambda x: x[1], reverse=True)
+        top_entities = [name for name, score in sorted_entities[:top_k]]
+        logger.debug(f"Top {top_k} entities: {top_entities}")
+        return top_entities
 
     async def _generate_search_query(
-        self, user_query: str, weighted_entities: list[tuple[str, float]]
+        self, user_query: str, related_entities: list[str]
     ) -> str:
         """
         Use LLM to generate an optimized search query for RAG.
         
         Args:
             user_query: The user's current message
-            weighted_entities: List of (entity_name, weight) tuples from knowledge graph
+            related_entities: List of related entity names from knowledge graph
             
         Returns:
             Optimized search query string
         """
         # If no related entities and short query, use original
-        if not weighted_entities and len(user_query) < 50:
+        if not related_entities and len(user_query) < 50:
             return user_query
 
         entities_context = ""
-        if weighted_entities:
-            # Format weighted entities for LLM
-            entity_lines = []
-            for name, weight in weighted_entities[:10]:
-                if weight >= 0.75:
-                    relevance = "高"
-                elif weight >= 0.25:
-                    relevance = "中"
-                else:
-                    relevance = "低"
-                entity_lines.append(f"  - {name} (関連度: {relevance})")
-            entities_str = "\n".join(entity_lines)
-            entities_context = f"\n\n関連するエンティティ（ナレッジグラフから、関連度順）:\n{entities_str}"
+        if related_entities:
+            entities_str = ", ".join(related_entities)
+            entities_context = f"\n\n関連するエンティティ（ナレッジグラフから）: {entities_str}"
 
         prompt = f"""以下のユーザーの発言に対して、過去の会話履歴を検索するための最適な検索クエリを生成してください。
 検索クエリは、ユーザーの意図を捉えつつ、関連する記憶を見つけやすいように言い換えや拡張を行ってください。
-関連度が高いエンティティを優先的に検索クエリに含めてください。
 {entities_context}
 
 ユーザーの発言: {user_query}
@@ -747,11 +790,9 @@ class MemorySystem:
         except Exception as e:
             logger.warning(f"Search query generation failed: {e}, using original query")
 
-        # Fallback: simple expansion (prioritize high-weight entities)
-        if weighted_entities:
-            # Take top 5 entities by weight
-            top_entities = [name for name, weight in weighted_entities[:5]]
-            entities_str = ", ".join(top_entities)
+        # Fallback: simple expansion
+        if related_entities:
+            entities_str = ", ".join(related_entities)
             return f"{user_query} {entities_str}"
         return user_query
 
