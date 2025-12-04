@@ -354,23 +354,25 @@ class MemorySystem:
         self,
         user_message: str,
         messages: list[dict[str, Any]] | None = None,
-        assistant_message: str | None = None,
     ) -> str:
         """
-        Save a conversation turn to memory.
+        Reserve a conversation ID and register hash for chain tracking.
+        
+        Actual text storage happens in process_conversation after compression.
+        This method only:
+        1. Generates a conversation_id
+        2. Computes and stores hashes for conversation chain tracking
         
         Args:
-            user_message: The user's message
+            user_message: The user's message (used for hash computation only)
             messages: OpenAI-style messages array (for conversation chain tracking)
-            assistant_message: The assistant's response (optional, can be added later)
             
         Returns:
-            conversation_id: UUID of the saved conversation
+            conversation_id: UUID for the conversation
         """
         self._ensure_initialized()
 
         conversation_id = str(uuid.uuid4())
-        timestamp = datetime.now(timezone.utc).isoformat()
 
         # Compute hashes for conversation chain tracking
         messages_hash = None
@@ -380,44 +382,19 @@ class MemorySystem:
             parent_hash = compute_parent_hash(messages)
             logger.debug(f"Messages hash: {messages_hash}, Parent hash: {parent_hash}")
 
-        # Save to ChromaDB (user message)
-        self._user_collection.add(
-            ids=[conversation_id],
-            documents=[user_message],
-            metadatas=[{
-                "conversation_id": conversation_id,
-                "timestamp": timestamp,
-                "role": "user",
-                "messages_hash": messages_hash or "",
-                "parent_hash": parent_hash or "",
-            }],
-        )
-
-        # Save assistant message if provided
-        if assistant_message:
-            self._assistant_collection.add(
-                ids=[conversation_id],
-                documents=[assistant_message],
-                metadatas=[{
-                    "conversation_id": conversation_id,
-                    "timestamp": timestamp,
-                    "role": "assistant",
-                }],
-            )
-
-        # Save to SQLite
+        # Save to SQLite (hashes only, text will be added in process_conversation)
         with self._db_session() as session:
             record = ConversationRecord(
                 id=conversation_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
+                user_message="",  # Placeholder, will be updated
+                assistant_message=None,
                 messages_hash=messages_hash,
                 parent_hash=parent_hash,
             )
             session.add(record)
             session.commit()
 
-        logger.debug(f"Saved conversation {conversation_id}")
+        logger.debug(f"Reserved conversation {conversation_id}")
         return conversation_id
 
     def delete_memory(self, conversation_id: str):
@@ -464,38 +441,6 @@ class MemorySystem:
         for conv_id in conversation_ids:
             self.delete_memory(conv_id)
         logger.info(f"Deleted {len(conversation_ids)} memories")
-
-    def update_assistant_message(self, conversation_id: str, assistant_message: str):
-        """
-        Update the assistant message for an existing conversation.
-        
-        Args:
-            conversation_id: UUID of the conversation
-            assistant_message: The assistant's response
-        """
-        self._ensure_initialized()
-
-        timestamp = datetime.now(timezone.utc).isoformat()
-
-        # Add to ChromaDB
-        self._assistant_collection.add(
-            ids=[conversation_id],
-            documents=[assistant_message],
-            metadatas=[{
-                "conversation_id": conversation_id,
-                "timestamp": timestamp,
-                "role": "assistant",
-            }],
-        )
-
-        # Update SQLite
-        with self._db_session() as session:
-            record = session.query(ConversationRecord).filter_by(id=conversation_id).first()
-            if record:
-                record.assistant_message = assistant_message
-                session.commit()
-
-        logger.debug(f"Updated assistant message for {conversation_id}")
 
     async def load_memory(
         self,
@@ -1166,20 +1111,23 @@ class MemorySystem:
 
     async def process_conversation(self, conversation_id: str, user_message: str, assistant_message: str):
         """
-        Process a completed conversation: compress, extract entities, and update storage.
+        Process a completed conversation: compress, store, extract entities, and update graph.
         
         This method:
         1. Compresses user message and assistant message individually (if COMPRESS_MODEL is set)
-        2. Updates ChromaDB and SQLite with compressed versions
-        3. Extracts entities and relations from original messages
-        4. Updates knowledge graph
+        2. Stores compressed versions to ChromaDB (for semantic search)
+        3. Updates SQLite with compressed versions (for conversation chain display)
+        4. Extracts entities and relations from ORIGINAL messages
+        5. Updates knowledge graph
         
         Args:
-            conversation_id: UUID of the conversation
+            conversation_id: UUID of the conversation (from save_memory)
             user_message: The user's message (original)
             assistant_message: The assistant's response (original)
         """
         self._ensure_initialized()
+
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         # Compress both messages individually
         compressed_user = await self.compress_text(user_message, role="user")
@@ -1188,27 +1136,29 @@ class MemorySystem:
         logger.debug(f"User message: {len(user_message)} -> {len(compressed_user)} chars")
         logger.debug(f"Assistant message: {len(assistant_message)} -> {len(compressed_assistant)} chars")
 
-        # Update ChromaDB with compressed user message (delete and re-add)
-        if compressed_user != user_message:
-            try:
-                # Get existing metadata
-                results = self._user_collection.get(ids=[conversation_id], include=["metadatas"])
-                if results["metadatas"] and results["metadatas"][0]:
-                    metadata = results["metadatas"][0]
-                    # Delete old entry
-                    self._user_collection.delete(ids=[conversation_id])
-                    # Add compressed version
-                    self._user_collection.add(
-                        ids=[conversation_id],
-                        documents=[compressed_user],
-                        metadatas=[metadata],
-                    )
-                    logger.debug(f"Updated user message in ChromaDB with compressed version")
-            except Exception as e:
-                logger.warning(f"Failed to update compressed user message: {e}")
+        # Get hashes from SQLite for metadata
+        messages_hash = ""
+        parent_hash = ""
+        with self._db_session() as session:
+            record = session.query(ConversationRecord).filter_by(id=conversation_id).first()
+            if record:
+                messages_hash = record.messages_hash or ""
+                parent_hash = record.parent_hash or ""
 
-        # Update assistant message in ChromaDB
-        timestamp = datetime.now(timezone.utc).isoformat()
+        # Store compressed user message to ChromaDB
+        self._user_collection.add(
+            ids=[conversation_id],
+            documents=[compressed_user],
+            metadatas=[{
+                "conversation_id": conversation_id,
+                "timestamp": timestamp,
+                "role": "user",
+                "messages_hash": messages_hash,
+                "parent_hash": parent_hash,
+            }],
+        )
+
+        # Store compressed assistant message to ChromaDB
         self._assistant_collection.add(
             ids=[conversation_id],
             documents=[compressed_assistant],
@@ -1227,7 +1177,7 @@ class MemorySystem:
                 record.assistant_message = compressed_assistant
                 session.commit()
 
-        logger.debug(f"Updated conversation {conversation_id} with compressed messages")
+        logger.debug(f"Stored conversation {conversation_id} with compressed messages")
 
         # Extract entities and relations from ORIGINAL messages (not compressed)
         # to preserve full context for knowledge graph
