@@ -599,7 +599,6 @@ class MemorySystem:
             return ""
 
         for i, memory in enumerate(memories):
-            logger.debug(f"[Memory {i}]")
             logger.debug(memory)
             logger.debug("---")
 
