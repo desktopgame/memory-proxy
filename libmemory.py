@@ -590,9 +590,9 @@ class MemorySystem:
             else:
                 # Fallback: just show the hit conversation
                 assistant_response = self._get_assistant_response(conversation_id)
-                memory_entry = f"[Memory {i+1}] User: {doc}"
+                memory_entry = f"[Memory {i+1}] <user> {doc} </user>"
                 if assistant_response:
-                    memory_entry += f"\nAssistant: {assistant_response}"
+                    memory_entry += f"\n<assistant> {assistant_response} </assistant>"
                 memories.append(memory_entry)
 
         if not memories:
@@ -965,9 +965,9 @@ class MemorySystem:
         entries = []
         for i, record in enumerate(chain):
             marker = "→" if i == center_index else " "
-            entry = f"{marker} User: {record.user_message}"
+            entry = f"{marker} <user> {record.user_message} </user>"
             if record.assistant_message:
-                entry += f"\n  Assistant: {record.assistant_message}"
+                entry += f"\n  <assistant> {record.assistant_message} </assistant>"
             entries.append(entry)
 
         return "\n".join(entries)
