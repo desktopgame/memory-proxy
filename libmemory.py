@@ -418,6 +418,51 @@ class MemorySystem:
         logger.debug(f"Saved conversation {conversation_id}")
         return conversation_id
 
+    def delete_memory(self, conversation_id: str):
+        """
+        Delete a memory from all storage (ChromaDB and SQLite).
+        
+        Args:
+            conversation_id: UUID of the conversation to delete
+        """
+        self._ensure_initialized()
+
+        # Delete from ChromaDB (user messages)
+        try:
+            self._user_collection.delete(ids=[conversation_id])
+            logger.debug(f"Deleted user message {conversation_id} from ChromaDB")
+        except Exception as e:
+            logger.warning(f"Failed to delete user message from ChromaDB: {e}")
+
+        # Delete from ChromaDB (assistant messages)
+        try:
+            self._assistant_collection.delete(ids=[conversation_id])
+            logger.debug(f"Deleted assistant message {conversation_id} from ChromaDB")
+        except Exception as e:
+            logger.warning(f"Failed to delete assistant message from ChromaDB: {e}")
+
+        # Delete from SQLite
+        try:
+            with self._db_session() as session:
+                record = session.query(ConversationRecord).filter_by(id=conversation_id).first()
+                if record:
+                    session.delete(record)
+                    session.commit()
+                    logger.debug(f"Deleted conversation {conversation_id} from SQLite")
+        except Exception as e:
+            logger.warning(f"Failed to delete from SQLite: {e}")
+
+    def delete_memories(self, conversation_ids: list[str]):
+        """
+        Delete multiple memories from all storage.
+        
+        Args:
+            conversation_ids: List of conversation UUIDs to delete
+        """
+        for conv_id in conversation_ids:
+            self.delete_memory(conv_id)
+        logger.info(f"Deleted {len(conversation_ids)} memories")
+
     def update_assistant_message(self, conversation_id: str, assistant_message: str):
         """
         Update the assistant message for an existing conversation.
@@ -456,6 +501,7 @@ class MemorySystem:
         n_results: int = 5,
         chain_depth_before: int = 2,
         chain_depth_after: int = 2,
+        delete_duplicates: bool = False,
     ) -> str:
         """
         Load relevant memories based on the query, including conversation context.
@@ -464,14 +510,17 @@ class MemorySystem:
         1. Searches the knowledge graph for related entities
         2. Uses LLM to generate an optimized search query
         3. Performs semantic search on RAG
-        4. Retrieves conversation chain (before/after) for each hit
-        5. Returns formatted memory context
+        4. Removes duplicates based on cosine similarity
+        5. Optionally deletes duplicates from database
+        6. Retrieves conversation chain (before/after) for each hit
+        7. Returns formatted memory context
         
         Args:
             query: The search query (usually the user's current message)
             n_results: Maximum number of results to return
             chain_depth_before: How many previous conversations to retrieve
             chain_depth_after: How many next conversations to retrieve
+            delete_duplicates: If True, delete detected duplicates from database
             
         Returns:
             Formatted string containing relevant memories with context
@@ -539,6 +588,8 @@ class MemorySystem:
 
         # Remove duplicates based on cosine similarity
         deduplicated_results = []
+        duplicate_ids = []  # Track conversation IDs of duplicates for deletion
+        
         for result in filtered_results:
             is_duplicate = False
             if result["embedding"] is not None:
@@ -547,6 +598,10 @@ class MemorySystem:
                         similarity = cosine_similarity(result["embedding"], selected["embedding"])
                         if similarity >= MEMORY_DUPLICATE_THRESHOLD:
                             is_duplicate = True
+                            # Record duplicate for potential deletion
+                            dup_id = result["metadata"].get("conversation_id")
+                            if dup_id:
+                                duplicate_ids.append(dup_id)
                             logger.debug(
                                 f"Duplicate detected (similarity={similarity:.3f}): "
                                 f"'{result['doc'][:50]}...' similar to '{selected['doc'][:50]}...'"
@@ -562,6 +617,11 @@ class MemorySystem:
             f"After deduplication: {len(deduplicated_results)} results "
             f"(removed {len(filtered_results) - len(deduplicated_results)} duplicates)"
         )
+
+        # Delete duplicates from database if requested
+        if delete_duplicates and duplicate_ids:
+            logger.info(f"Deleting {len(duplicate_ids)} duplicate memories from database")
+            self.delete_memories(duplicate_ids)
 
         ranked_results = deduplicated_results
 
@@ -1113,7 +1173,7 @@ async def load_memory(input_text: str) -> str:
     Returns:
         Formatted memory context to append to prompt
     """
-    return await get_memory_system().load_memory(input_text)
+    return await get_memory_system().load_memory(input_text, delete_duplicates=True)
 
 
 async def process_conversation(conversation_id: str, user_message: str, assistant_message: str):
