@@ -51,7 +51,7 @@ TIME_DECAY_WEIGHT = float(os.getenv("TIME_DECAY_WEIGHT", "0.3"))
 # Distance threshold for memory relevance
 # Memories with adjusted distance above this threshold are excluded
 # ChromaDB L2 distance: 0 = identical, ~2 = very different
-MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.0"))
+MEMORY_DISTANCE_THRESHOLD = float(os.getenv("MEMORY_DISTANCE_THRESHOLD", "1.5"))
 
 # Duplicate detection threshold for memory search results
 # Results with cosine similarity above this threshold are considered duplicates
@@ -761,7 +761,7 @@ class MemorySystem:
                 # Normalize embedding similarity from [-1, 1] to [0, 1]
                 embedding_sim_normalized = (embedding_sim + 1.0) / 2.0
                 # Final score: weighted combination
-                final_score = graph_score * 0.5 + embedding_sim_normalized * 0.5
+                final_score = graph_score * 0.75 + embedding_sim_normalized * 0.25
                 entity_final_scores[name] = final_score
                 
             logger.debug(f"Entity scores (graph+embedding): {entity_final_scores}")
