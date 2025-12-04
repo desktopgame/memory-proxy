@@ -13,3 +13,4 @@ wheels/
 .env.local
 memory.db
 chroma_data
+temp
