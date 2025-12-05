@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 DELEGATE_URL = os.getenv("DELEGATE_URL", "http://localhost:7071")
-SUPPORT_MODEL = os.getenv("SUPPORT_MODEL", "")
+HIGH_SUPPORT_MODEL = os.getenv("HIGH_SUPPORT_MODEL", "")
+LOW_SUPPORT_MODEL = os.getenv("LOW_SUPPORT_MODEL", "")
 COMPRESS_MODEL = os.getenv("COMPRESS_MODEL", "")  # Model for compressing/summarizing text
 COMPRESS_MAX_LENGTH = int(os.getenv("COMPRESS_MAX_LENGTH", "200"))  # Max chars for compressed text
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://localhost:1234")
@@ -863,7 +864,7 @@ class MemorySystem:
 
         try:
             response = await self._llm_client.chat.completions.create(
-                model=SUPPORT_MODEL,
+                model=HIGH_SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 response_format={
@@ -1091,7 +1092,7 @@ class MemorySystem:
 
         try:
             response = await self._llm_client.chat.completions.create(
-                model=SUPPORT_MODEL,
+                model=HIGH_SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 response_format={
@@ -1174,7 +1175,7 @@ class MemorySystem:
 
         try:
             response = await self._llm_client.chat.completions.create(
-                model=SUPPORT_MODEL,
+                model=LOW_SUPPORT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 response_format={
