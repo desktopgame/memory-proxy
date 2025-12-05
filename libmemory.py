@@ -998,8 +998,8 @@ class MemorySystem:
             Compressed text (max COMPRESS_MAX_LENGTH chars)
         """
         # Skip compression if model not configured or text is short
-        if not COMPRESS_MODEL or len(text) <= COMPRESS_MAX_LENGTH:
-            return text
+        # if not COMPRESS_MODEL or len(text) <= COMPRESS_MAX_LENGTH:
+        #     return text
 
         self._ensure_initialized()
 
