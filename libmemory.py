@@ -475,7 +475,7 @@ class MemorySystem:
         self._ensure_initialized()
 
         # Get related entities from knowledge graph
-        related_entities = self._get_related_entities(query, top_k=1, random_k=4)
+        related_entities = self._get_related_entities(query, top_k=4, random_k=1)
         logger.debug(f"Related entities: {related_entities}")
 
         # Use LLM to generate optimized search query
@@ -674,7 +674,7 @@ class MemorySystem:
         1. Graph distance from mentioned entities (exponential decay: 0.5^depth)
         2. Cosine similarity between entity name embedding and input text embedding
         
-        Final score = graph_score * 0.5 + embedding_similarity * 0.5
+        Final score = graph_score * 0.25 + embedding_similarity * 0.75
         
         Returns top_k entities by score, plus random_k entities selected via
         weighted random sampling (higher scores = higher probability).
@@ -761,7 +761,7 @@ class MemorySystem:
                 # Normalize embedding similarity from [-1, 1] to [0, 1]
                 embedding_sim_normalized = (embedding_sim + 1.0) / 2.0
                 # Final score: weighted combination
-                final_score = graph_score * 0.75 + embedding_sim_normalized * 0.25
+                final_score = graph_score * 0.25 + embedding_sim_normalized * 0.75
                 entity_final_scores[name] = final_score
                 
             logger.debug(f"Entity scores (graph+embedding): {entity_final_scores}")
@@ -772,6 +772,7 @@ class MemorySystem:
 
         # Sort by final score descending
         sorted_entities = sorted(entity_final_scores.items(), key=lambda x: x[1], reverse=True)
+        sorted_entities = list(filter(lambda v: v[1] >= 0.5, sorted_entities))
         
         # Select top_k entities by score
         top_entities = [name for name, score in sorted_entities[:top_k]]
@@ -779,7 +780,7 @@ class MemorySystem:
         
         # Select random_k additional entities via weighted random sampling
         # Exclude already selected top_k entities
-        remaining_entities = [(name, score) for name, score in sorted_entities[top_k:] if name not in selected_names]
+        remaining_entities = [(name, score) for name, score in sorted_entities if name not in selected_names]
         
         random_entities = []
         if remaining_entities and random_k > 0:
