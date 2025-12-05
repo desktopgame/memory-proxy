@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from libmemory import save_memory, load_memory, process_conversation
+from libmemory import save_memory, load_memory, should_load_memory, process_conversation
 from libproxy import get_proxy, LlamaProxy
 
 
@@ -29,12 +29,20 @@ async def chat_completions(request: Request):
     messages = body.get("messages", [])
     stream = body.get("stream", False)
 
-    # Get user message and load relevant memories
+    # Get user message
     user_message = _get_user_message(messages)
     logger.debug(f"User message: {user_message}")
     
-    memory_context = await load_memory(user_message)
-    enhanced_messages = _cheat_messages(messages, memory_context)
+    # Check if memory lookup is needed
+    needs_memory = await should_load_memory(user_message)
+    logger.debug(f"Needs memory: {needs_memory}")
+    
+    # Load memories only if needed
+    if needs_memory:
+        memory_context = await load_memory(user_message)
+        enhanced_messages = _cheat_messages(messages, memory_context)
+    else:
+        enhanced_messages = messages
 
     # Save user message to memory and get conversation_id (with messages for chain tracking)
     conversation_id = save_memory(user_message, messages=messages)

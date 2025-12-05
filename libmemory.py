@@ -1110,6 +1110,92 @@ class MemorySystem:
 
         return []
 
+    async def should_load_memory(self, user_message: str) -> bool:
+        """
+        Determine if memory lookup is needed for the given user message.
+        
+        Uses LLM to judge whether the message requires past conversation context.
+        Examples of messages that need memory:
+        - References to past conversations ("前に話した〜", "さっきの〜")
+        - Questions about user preferences or history
+        - Follow-up questions that need context
+        
+        Examples that don't need memory:
+        - Simple greetings ("こんにちは")
+        - General knowledge questions ("日本の首都は？")
+        - Self-contained requests ("3+5は？")
+        
+        Args:
+            user_message: The user's current message
+            
+        Returns:
+            True if memory should be loaded, False otherwise
+        """
+        self._ensure_initialized()
+        
+        prompt = f"""ユーザーの発言を分析し、過去の会話履歴（記憶）を参照する必要があるかを判断してください。
+
+記憶参照が必要なケース:
+- 過去の会話への言及（「前に話した〜」「さっきの〜」「覚えてる？」など）
+- ユーザーの好みや履歴に関する質問
+- 文脈がないと意味が分からない発言
+- 継続的なタスクや話題への言及
+
+記憶参照が不要なケース:
+- 挨拶（「こんにちは」「おはよう」など）
+- 一般的な知識への質問（「日本の首都は？」など）
+- 自己完結した依頼（「3+5を計算して」など）
+- 新しい話題の開始
+
+ユーザーの発言: {user_message}
+
+この発言に対して過去の記憶を参照する必要がありますか？"""
+
+        # JSON Schema for structured output
+        json_schema = {
+            "name": "memory_decision",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "needs_memory": {
+                        "type": "boolean",
+                        "description": "True if memory lookup is needed"
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of the decision"
+                    }
+                },
+                "required": ["needs_memory", "reasoning"],
+                "additionalProperties": False
+            }
+        }
+
+        try:
+            response = await self._llm_client.chat.completions.create(
+                model=SUPPORT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                }
+            )
+            
+            content = response.choices[0].message.content
+            if content:
+                result = json.loads(content)
+                needs_memory = result.get("needs_memory", False)
+                reasoning = result.get("reasoning", "")
+                logger.debug(f"Memory decision: {needs_memory}, reason: {reasoning}")
+                return needs_memory
+        except Exception as e:
+            logger.warning(f"Memory decision failed: {e}, defaulting to True")
+            return True  # Default to loading memory on error for safety
+        
+        return True  # Default to loading memory
+
     async def process_conversation(self, conversation_id: str, user_message: str, assistant_message: str):
         """
         Process a completed conversation: compress, store, extract entities, and update graph.
@@ -1235,6 +1321,21 @@ async def load_memory(input_text: str) -> str:
         Formatted memory context to append to prompt
     """
     return await get_memory_system().load_memory(input_text, delete_duplicates=True)
+
+
+async def should_load_memory(user_message: str) -> bool:
+    """
+    Determine if memory lookup is needed for the given user message.
+    
+    Uses LLM to judge whether the message requires past conversation context.
+    
+    Args:
+        user_message: The user's current message
+        
+    Returns:
+        True if memory should be loaded, False otherwise
+    """
+    return await get_memory_system().should_load_memory(user_message)
 
 
 async def process_conversation(conversation_id: str, user_message: str, assistant_message: str):
