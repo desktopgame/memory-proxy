@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from libmemory import save_memory, load_memory, should_load_memory, process_conversation
+from libmemory import save_memory, load_memory, should_load_memory, process_conversation, should_save_memory
 from libproxy import get_proxy, LlamaProxy
 
 
@@ -44,9 +44,13 @@ async def chat_completions(request: Request):
     else:
         enhanced_messages = messages
 
+    should_save_memory_flag = await should_save_memory(user_message)
+
     # Save user message to memory and get conversation_id (with messages for chain tracking)
-    conversation_id = save_memory(user_message, messages=messages)
-    logger.debug(f"Saved conversation: {conversation_id}")
+    conversation_id = ""
+    if should_save_memory_flag:
+        conversation_id = save_memory(user_message, messages=messages)
+        logger.debug(f"Saved conversation: {conversation_id}")
 
     # Update body with enhanced messages
     enhanced_body = {**body, "messages": enhanced_messages}
@@ -56,11 +60,11 @@ async def chat_completions(request: Request):
 
     if stream:
         return await _handle_streaming_response(
-            proxy, enhanced_body, user_message, conversation_id, request.headers
+            proxy, enhanced_body, user_message, conversation_id, request.headers, should_save_memory_flag
         )
     else:
         return await _handle_non_streaming_response(
-            proxy, enhanced_body, user_message, conversation_id, request.headers
+            proxy, enhanced_body, user_message, conversation_id, request.headers, should_save_memory_flag
         )
 
 
@@ -70,6 +74,7 @@ async def _handle_non_streaming_response(
     user_message: str,
     conversation_id: str,
     headers,
+    should_save_memory_flag: bool
 ) -> JSONResponse:
     """Handle non-streaming chat completion request."""
     # Forward to llama.cpp
@@ -89,9 +94,10 @@ async def _handle_non_streaming_response(
     result = response.json()
 
     # Extract assistant's response and process conversation
-    assistant_content = _extract_assistant_content(result)
-    if assistant_content:
-        await process_conversation(conversation_id, user_message, assistant_content)
+    if should_save_memory_flag:
+        assistant_content = _extract_assistant_content(result)
+        if assistant_content:
+            await process_conversation(conversation_id, user_message, assistant_content)
 
     return JSONResponse(content=result)
 
@@ -102,6 +108,7 @@ async def _handle_streaming_response(
     user_message: str,
     conversation_id: str,
     headers,
+    should_save_memory_flag: bool
 ) -> StreamingResponse:
     """Handle streaming chat completion request."""
 
@@ -121,7 +128,7 @@ async def _handle_streaming_response(
             yield chunk
 
         # After streaming completes, process conversation
-        if collected_content:
+        if collected_content and should_save_memory_flag:
             full_content = "".join(collected_content)
             if full_content:
                 await process_conversation(conversation_id, user_message, full_content)
