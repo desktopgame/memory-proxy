@@ -624,11 +624,20 @@ class MemorySystem:
         ranked_results = deduplicated_results
 
         # Format results with conversation chain
+        # Track already included conversation IDs to avoid duplicates across chains
+        included_conversation_ids: set[str] = set()
         memories = []
-        for i, result in enumerate(ranked_results):
+        memory_index = 0
+        
+        for result in ranked_results:
             metadata = result["metadata"]
             doc = result["doc"]
             conversation_id = metadata.get("conversation_id")
+            
+            # Skip if this conversation was already included in a previous chain
+            if conversation_id in included_conversation_ids:
+                logger.debug(f"Skipping {conversation_id}: already included in previous chain")
+                continue
 
             # Get conversation chain (before and after)
             chain = self._get_conversation_chain(
@@ -638,17 +647,32 @@ class MemorySystem:
             )
 
             if chain:
-                # Find center index (the hit conversation)
+                # Filter out conversations already included in previous chains
+                filtered_chain = [r for r in chain if r.id not in included_conversation_ids]
+                
+                if not filtered_chain:
+                    logger.debug(f"Skipping chain for {conversation_id}: all records already included")
+                    continue
+                
+                # Mark all conversations in this chain as included
+                for record in filtered_chain:
+                    included_conversation_ids.add(record.id)
+                
+                # Find center index in the filtered chain
                 center_index = next(
-                    (i for i, r in enumerate(chain) if r.id == conversation_id),
-                    len(chain) // 2,
+                    (i for i, r in enumerate(filtered_chain) if r.id == conversation_id),
+                    0,
                 )
-                chain_text = self._format_conversation_chain(chain, center_index)
-                memories.append(f"[Memory {i + 1}]\n{chain_text}")
+                
+                memory_index += 1
+                chain_text = self._format_conversation_chain(filtered_chain, center_index)
+                memories.append(f"[Memory {memory_index}]\n{chain_text}")
             else:
                 # Fallback: just show the hit conversation
+                included_conversation_ids.add(conversation_id)
+                memory_index += 1
                 assistant_response = self._get_assistant_response(conversation_id)
-                memory_entry = f"[Memory {i + 1}] <user> {doc} </user>"
+                memory_entry = f"[Memory {memory_index}] <user> {doc} </user>"
                 if assistant_response:
                     memory_entry += f"\n<assistant> {assistant_response} </assistant>"
                 memories.append(memory_entry)
