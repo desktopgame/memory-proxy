@@ -24,7 +24,7 @@ def extract_keywords_mecab(text: str) -> list[str]:
     Also handles English words.
     """
     keywords = set()
-    
+
     # Parse with MeCab
     node = _mecab.parseToNode(text)
     while node:
@@ -32,24 +32,26 @@ def extract_keywords_mecab(text: str) -> list[str]:
         if node.stat not in (MeCab.MECAB_BOS_NODE, MeCab.MECAB_EOS_NODE):
             surface = node.surface
             feature = node.feature  # "品詞,品詞細分類1,品詞細分類2,..."
-            
+
             # Check if this part of speech should be extracted
             for pattern in EXTRACT_POS_PATTERNS:
                 if feature.startswith(pattern):
                     # Get base form (7th element in IPAdic) if available
                     parts = feature.split(",")
-                    base_form = parts[6] if len(parts) > 6 and parts[6] != "*" else surface
-                    
+                    base_form = (
+                        parts[6] if len(parts) > 6 and parts[6] != "*" else surface
+                    )
+
                     if len(base_form) >= MIN_KEYWORD_LENGTH:
                         keywords.add(base_form.lower())
                     break
-        
+
         node = node.next
-    
+
     # Also extract English words (alphanumeric sequences)
     english_words = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{1,}", text)
     for word in english_words:
         if len(word) >= MIN_KEYWORD_LENGTH:
             keywords.add(word.lower())
-    
+
     return list(keywords)

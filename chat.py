@@ -32,11 +32,11 @@ async def chat_completions(request: Request):
     # Get user message
     user_message = _get_user_message(messages)
     logger.debug(f"User message: {user_message}")
-    
+
     # Check if memory lookup is needed
     needs_memory = await should_load_memory(user_message)
     logger.debug(f"Needs memory: {needs_memory}")
-    
+
     # Load memories only if needed
     if needs_memory:
         memory_context = await load_memory(user_message)
@@ -146,6 +146,7 @@ def _get_user_message(messages: list[dict[str, Any]]) -> str:
             elif isinstance(original_content, list):
                 return "\n".join(map(lambda o: o["text"], original_content))
     return ""
+
 
 def _cheat_messages(
     messages: list[dict[str, Any]],
