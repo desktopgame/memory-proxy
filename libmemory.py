@@ -306,7 +306,7 @@ def compute_parent_hash(messages: list[dict[str, Any]]) -> str | None:
     if len(messages) <= 1:
         return None
     # Remove last message (the current user message)
-    parent_messages = messages[:-1]
+    parent_messages = messages[:-2]
     return compute_messages_hash(parent_messages)
 
 
