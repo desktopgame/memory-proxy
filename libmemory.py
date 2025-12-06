@@ -1223,7 +1223,7 @@ class MemorySystem:
 
         return []
 
-    async def should_save_memory(self, user_message: str, assistant_message: str) -> bool:
+    async def should_save_memory(self, user_message: str) -> bool:
         """
         Determine if the conversation should be saved to memory.
 
@@ -1251,7 +1251,7 @@ class MemorySystem:
         """
         self._ensure_initialized()
 
-        prompt = f"""以下の会話を分析し、長期記憶として保存する価値があるかを判断してください。
+        prompt = f"""以下のメッセージを分析し、長期記憶として保存する価値があるかを判断してください。
 
 保存すべきケース:
 - ユーザーの好み、個人情報、習慣に関する情報
@@ -1267,11 +1267,10 @@ class MemorySystem:
 - 既に保存されている情報の繰り返し
 - 一時的で将来参照しない情報
 
-会話:
-ユーザー: {user_message}
-アシスタント: {assistant_message}
+ユーザーのメッセージ：
+{user_message}
 
-この会話を長期記憶として保存すべきですか？"""
+このメッセージを長期記憶として保存すべきですか？"""
 
         # JSON Schema for structured output
         json_schema = {
@@ -1558,7 +1557,7 @@ async def should_load_memory(user_message: str) -> bool:
     return await get_memory_system().should_load_memory(user_message)
 
 
-async def should_save_memory(user_message: str, assistant_message: str) -> bool:
+async def should_save_memory(user_message: str) -> bool:
     """
     Determine if the conversation should be saved to memory.
 
@@ -1571,7 +1570,7 @@ async def should_save_memory(user_message: str, assistant_message: str) -> bool:
     Returns:
         True if conversation should be saved, False otherwise
     """
-    return await get_memory_system().should_save_memory(user_message, assistant_message)
+    return await get_memory_system().should_save_memory(user_message)
 
 
 async def process_conversation(
