@@ -1094,6 +1094,7 @@ class MemorySystem:
 
         prompt = f"""以下の{role_desc}を{COMPRESS_MAX_LENGTH}文字以内に要約してください。
 重要な情報（固有名詞、数値、事実）を優先的に残してください。
+推測は行わないでください。
 
 元のテキスト:
 {text}
