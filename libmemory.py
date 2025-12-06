@@ -16,6 +16,7 @@ import random
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from dotenv import load_dotenv
 
 import chromadb
 import numpy as np
@@ -26,6 +27,8 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime, Foreign
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 from libword import extract_keywords_mecab
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
