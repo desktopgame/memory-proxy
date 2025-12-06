@@ -1223,6 +1223,98 @@ class MemorySystem:
 
         return []
 
+    async def should_save_memory(self, user_message: str, assistant_message: str) -> bool:
+        """
+        Determine if the conversation should be saved to memory.
+
+        Uses LLM to judge whether the conversation contains valuable information
+        worth remembering for future reference.
+
+        Examples of conversations worth saving:
+        - User preferences and personal information
+        - Important facts or decisions
+        - Learning outcomes or new knowledge
+        - Tasks or projects discussed
+
+        Examples not worth saving:
+        - Simple greetings ("こんにちは" "元気？")
+        - Test messages or casual chatter
+        - Repeated or redundant information
+        - Very short or trivial exchanges
+
+        Args:
+            user_message: The user's message
+            assistant_message: The assistant's response
+
+        Returns:
+            True if conversation should be saved, False otherwise
+        """
+        self._ensure_initialized()
+
+        prompt = f"""以下の会話を分析し、長期記憶として保存する価値があるかを判断してください。
+
+保存すべきケース:
+- ユーザーの好み、個人情報、習慣に関する情報
+- 重要な事実、決定事項、約束
+- 学習した内容や新しい知識
+- プロジェクトやタスクに関する議論
+- 将来参照する可能性のある情報
+
+保存不要なケース:
+- 単純な挨拶やあいさつのやりとり
+- テストや雑談
+- 非常に短い、または些細なやりとり
+- 既に保存されている情報の繰り返し
+- 一時的で将来参照しない情報
+
+会話:
+ユーザー: {user_message}
+アシスタント: {assistant_message}
+
+この会話を長期記憶として保存すべきですか？"""
+
+        # JSON Schema for structured output
+        json_schema = {
+            "name": "save_memory_decision",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "should_save": {
+                        "type": "boolean",
+                        "description": "True if conversation should be saved",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of the decision",
+                    },
+                },
+                "required": ["should_save", "reasoning"],
+                "additionalProperties": False,
+            },
+        }
+
+        try:
+            response = await self._llm_client.chat.completions.create(
+                model=LOW_SUPPORT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                response_format={"type": "json_schema", "json_schema": json_schema},
+            )
+
+            content = response.choices[0].message.content
+            if content:
+                result = json.loads(content)
+                should_save = result.get("should_save", True)
+                reasoning = result.get("reasoning", "")
+                logger.debug(f"Save memory decision: {should_save}, reason: {reasoning}")
+                return should_save
+        except Exception as e:
+            logger.warning(f"Save memory decision failed: {e}, defaulting to True")
+            return True  # Default to saving on error for safety
+
+        return True  # Default to saving
+
     async def should_load_memory(self, user_message: str) -> bool:
         """
         Determine if memory lookup is needed for the given user message.
@@ -1464,6 +1556,22 @@ async def should_load_memory(user_message: str) -> bool:
         True if memory should be loaded, False otherwise
     """
     return await get_memory_system().should_load_memory(user_message)
+
+
+async def should_save_memory(user_message: str, assistant_message: str) -> bool:
+    """
+    Determine if the conversation should be saved to memory.
+
+    Uses LLM to judge whether the conversation contains valuable information.
+
+    Args:
+        user_message: The user's message
+        assistant_message: The assistant's response
+
+    Returns:
+        True if conversation should be saved, False otherwise
+    """
+    return await get_memory_system().should_save_memory(user_message, assistant_message)
 
 
 async def process_conversation(
