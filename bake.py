@@ -18,9 +18,9 @@ async def main():
         for line in lines:
             input = line.strip()
             message = {"role": "user", "content": input}
-            messages.append(messages)
+            messages.append(message)
             resp = await client.chat.completions.create(model=MODEL, messages=messages)
-            messages.append(resp.choices[0].message)
+            messages.append(resp.choices[0].message.to_dict())
     print("done.")
 
 
