@@ -1,6 +1,6 @@
 import os
 import asyncio
-from openai import AsyncClient
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,7 +9,7 @@ MODEL = os.getenv("HIGH_SUPPORT_MODEL")
 
 
 async def main():
-    client = AsyncClient(base_url="http://localhost:7070/v1")
+    client = AsyncOpenAI(base_url="http://localhost:7070/v1", api_key="not-needed")
     messages = []
 
     print("bake start.")
