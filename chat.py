@@ -44,7 +44,8 @@ async def chat_completions(request: Request):
     else:
         enhanced_messages = messages
 
-    should_save_memory_flag = await should_save_memory(user_message)
+    # should_save_memory_flag = await should_save_memory(user_message)
+    should_save_memory_flag = True
 
     # Save user message to memory and get conversation_id (with messages for chain tracking)
     conversation_id = ""
