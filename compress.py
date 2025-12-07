@@ -1,6 +1,6 @@
 import os
 import asyncio
-from libmemory import load_memory, close_memory_system
+from libmemory import get_memory_system, close_memory_system
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,10 +9,10 @@ MODEL = os.getenv("HIGH_SUPPORT_MODEL")
 
 
 async def main():
-    print("search start.")
-    with open("search.txt", "r", encoding="utf8") as fp:
-        input = fp.read()
-        print(await load_memory(input))
+    print("compress start.")
+    with open("long_text.txt", "r", encoding="utf8") as fp:
+        text = fp.read()
+        print(await get_memory_system().compress_text(text))
     await close_memory_system()
     print("done.")
 
