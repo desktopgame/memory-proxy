@@ -17,7 +17,12 @@ async def main():
         lines = fp.readlines()
         for line in lines:
             input = line.strip()
+            if len(input) == 0:
+                continue
             print(input)
+            if input == "---":
+                messages.clear()
+                continue
             message = {"role": "user", "content": input}
             messages.append(message)
             resp = await client.chat.completions.create(model=MODEL, messages=messages)
